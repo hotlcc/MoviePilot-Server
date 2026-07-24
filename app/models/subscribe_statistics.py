@@ -1,9 +1,9 @@
 """
 订阅统计模型
 """
-from typing import Union
+from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Float, or_, and_, select, delete, desc
+from sqlalchemy import Column, Integer, String, Float, Index, or_, select, delete, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.base import Base, get_id_column
@@ -29,6 +29,9 @@ class SubscribeStatistics(Base):
     tvdbid = Column(Integer)
     doubanid = Column(String, index=True)
     bangumiid = Column(Integer, index=True)
+    anilistid = Column(Integer, index=True)
+    media_source = Column(String, index=True)
+    media_id = Column(String, index=True)
     # genre_ids,分隔
     genre_ids = Column(String)
     # 季号
@@ -44,48 +47,38 @@ class SubscribeStatistics(Base):
     # 订阅人次
     count = Column(Integer)
 
+    __table_args__ = (
+        Index(
+            "ix_subscribe_statistics_media_identity",
+            "media_source",
+            "media_id",
+            "season",
+        ),
+    )
+
     async def create(self, db: AsyncSession):
         db.add(self)
         await db.commit()
         await db.refresh(self)
 
     @classmethod
-    async def read(cls, db: AsyncSession, mid: Union[str, int], season: int):
-        # 将 mid 转换为适当的类型进行比较
-        if isinstance(mid, str):
-            try:
-                mid_int = int(mid)
-            except ValueError:
-                mid_int = None
+    async def read(
+            cls,
+            db: AsyncSession,
+            media_source: str,
+            media_id: str,
+            season: Optional[int],
+    ):
+        """按数据源、原生 ID 和季号读取唯一统计记录。"""
+        query = select(cls).where(
+            cls.media_source == media_source,
+            cls.media_id == str(media_id),
+        )
+        if season is None:
+            query = query.where(cls.season.is_(None))
         else:
-            mid_int = mid
-            mid = str(mid)
-
-        if season:
-            conditions = []
-            if mid_int is not None:
-                conditions.append(cls.tmdbid == mid_int)
-            conditions.append(cls.doubanid == mid)
-
-            result = await db.execute(
-                select(cls).where(
-                    and_(
-                        or_(*conditions),
-                        cls.season == season
-                    )
-                )
-            )
-        else:
-            conditions = []
-            if mid_int is not None:
-                conditions.append(cls.tmdbid == mid_int)
-            conditions.append(cls.doubanid == mid)
-
-            result = await db.execute(
-                select(cls).where(
-                    or_(*conditions)
-                )
-            )
+            query = query.where(cls.season == season)
+        result = await db.execute(query)
         return result.scalars().first()
 
     async def update(self, db: AsyncSession, payload: dict):

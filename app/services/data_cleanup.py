@@ -201,7 +201,6 @@ class DataCleanupService:
             delete(SubscribeStatistics).where(
                 or_(
                     func.coalesce(SubscribeStatistics.count, 0) < 100,
-                    SubscribeStatistics.tmdbid.is_(None),
                     and_(
                         SubscribeStatistics.year.is_not(None),
                         year_value != "",

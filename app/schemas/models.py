@@ -44,6 +44,10 @@ class SubscribeStatisticItem(BaseModel):
     imdbid: Optional[str] = None
     tvdbid: Optional[int] = None
     doubanid: Optional[str] = None
+    bangumiid: Optional[int] = None
+    anilistid: Optional[int] = None
+    media_source: Optional[str] = None
+    media_id: Optional[str] = None
     genre_ids: Optional[str] = None
     season: Optional[int] = None
     poster: Optional[str] = None
@@ -72,6 +76,10 @@ class SubscribeShareItem(BaseModel):
     imdbid: Optional[str] = None
     tvdbid: Optional[int] = None
     doubanid: Optional[str] = None
+    bangumiid: Optional[int] = None
+    anilistid: Optional[int] = None
+    media_source: Optional[str] = None
+    media_id: Optional[str] = None
     season: Optional[int] = None
     poster: Optional[str] = None
     backdrop: Optional[str] = None
@@ -122,6 +130,9 @@ class MediaRecognizeShareItem(BaseModel):
     tmdbid: Optional[int] = None
     doubanid: Optional[str] = None
     bangumiid: Optional[int] = None
+    anilistid: Optional[int] = None
+    media_source: Optional[str] = None
+    media_id: Optional[str] = None
     title: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

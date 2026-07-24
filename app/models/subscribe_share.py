@@ -1,7 +1,7 @@
 """
 订阅分享模型
 """
-from sqlalchemy import Column, Integer, String, Float, or_, and_, func, select, delete, desc, update
+from sqlalchemy import Column, Integer, String, Float, Index, or_, and_, func, select, delete, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.base import Base, get_id_column
@@ -37,6 +37,9 @@ class SubscribeShare(Base):
     tvdbid = Column(Integer)
     doubanid = Column(String)
     bangumiid = Column(Integer)
+    anilistid = Column(Integer)
+    media_source = Column(String, index=True)
+    media_id = Column(String, index=True)
     # genre_ids,分隔
     genre_ids = Column(String)
     # 季号
@@ -71,6 +74,15 @@ class SubscribeShare(Base):
     date = Column(String, index=True)
     # 复用人次
     count = Column(Integer)
+
+    __table_args__ = (
+        Index(
+            "ix_subscribe_share_media_identity",
+            "media_source",
+            "media_id",
+            "season",
+        ),
+    )
 
     async def create(self, db: AsyncSession):
         db.add(self)

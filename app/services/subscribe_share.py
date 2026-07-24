@@ -8,8 +8,8 @@ from app.models import SubscribeShare
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_manager
+from app.core.media import resolve_media_identity
 from app.schemas.models import SubscribeShareItem, SortType
-from app.services.tmdb import tmdb_service
 
 
 class SubscribeShareService:
@@ -18,33 +18,20 @@ class SubscribeShareService:
     @staticmethod
     async def create_share(db: AsyncSession, subscribe: SubscribeShareItem) -> Dict[str, Any]:
         """新增订阅分享"""
-        if not subscribe.share_title or not subscribe.share_user:
+        media_source, media_id = resolve_media_identity(subscribe)
+        if (
+                not subscribe.share_title
+                or not subscribe.share_user
+                or not subscribe.name
+                or not media_source
+                or not media_id
+        ):
             return {
                 "code": 1,
-                "message": "请填写分享标题和说明"
+                "message": "分享信息或媒体身份不完整"
             }
-
-        # 如果没有genre_ids但有tmdbid，则查询TheMovieDB获取
-        if not subscribe.genre_ids and subscribe.tmdbid and subscribe.type:
-            try:
-                tmdb_info = await tmdb_service.get_media_info(subscribe.tmdbid, subscribe.type)
-                if tmdb_info and tmdb_info.get("genre_ids"):
-                    subscribe.genre_ids = tmdb_info["genre_ids"]
-                    # 同时更新其他可能缺失的信息
-                    if not subscribe.name and tmdb_info.get("name"):
-                        subscribe.name = tmdb_info["name"]
-                    if not subscribe.year and tmdb_info.get("year"):
-                        subscribe.year = tmdb_info["year"]
-                    if not subscribe.poster and tmdb_info.get("poster"):
-                        subscribe.poster = tmdb_info["poster"]
-                    if not subscribe.backdrop and tmdb_info.get("backdrop"):
-                        subscribe.backdrop = tmdb_info["backdrop"]
-                    if not subscribe.vote and tmdb_info.get("vote"):
-                        subscribe.vote = tmdb_info["vote"]
-                    if not subscribe.description and tmdb_info.get("description"):
-                        subscribe.description = tmdb_info["description"]
-            except Exception as e:
-                print(f"查询TheMovieDB失败: {e}")
+        subscribe.media_source = media_source
+        subscribe.media_id = media_id
 
         # 查询数据库中是否存在
         sub = await SubscribeShare.read(db, title=subscribe.share_title, user=subscribe.share_user)

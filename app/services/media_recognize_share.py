@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from app.core.config import settings
+from app.core.media import resolve_media_identity
 from app.db.redis import get_redis
 from app.schemas.models import MediaRecognizeShareItem
 
@@ -86,17 +87,17 @@ class MediaRecognizeShareService:
             cls, media_type: Optional[str], season: Optional[int]
     ) -> Optional[int]:
         """
-        电影不记录季信息，电视剧季号统一为正整数
+        电影不记录季信息，电视剧季号统一为非负整数
         """
         if cls._normalize_media_type(media_type) != "tv":
             return None
-        if season in (None, "", 0, "0"):
+        if season in (None, ""):
             return None
         try:
             season_value = int(season)
         except (TypeError, ValueError):
             return None
-        return season_value if season_value > 0 else None
+        return season_value if season_value >= 0 else None
 
     @classmethod
     def _build_cache_key(
@@ -114,7 +115,8 @@ class MediaRecognizeShareService:
         if not keyword_key or not type_key:
             return None
         year_key = cls._normalize_year(year) or ""
-        season_key = str(cls._normalize_season(type_key, season) or "")
+        normalized_season = cls._normalize_season(type_key, season)
+        season_key = "" if normalized_season is None else str(normalized_season)
         return f"{keyword_key}|{type_key}|{year_key}|{season_key}"
 
     @classmethod
@@ -136,6 +138,7 @@ class MediaRecognizeShareService:
         season = cls._normalize_season(media_type, item.get("season"))
         doubanid = item.get("doubanid")
         title = item.get("title")
+        media_source, media_id = resolve_media_identity(item)
 
         return {
             "keyword": keyword,
@@ -145,6 +148,9 @@ class MediaRecognizeShareService:
             "tmdbid": item.get("tmdbid"),
             "doubanid": str(doubanid).strip() if doubanid else None,
             "bangumiid": item.get("bangumiid"),
+            "anilistid": item.get("anilistid"),
+            "media_source": media_source,
+            "media_id": media_id,
             "title": str(title).strip() if title else None,
             "created_at": item.get("created_at"),
             "updated_at": item.get("updated_at"),
@@ -222,6 +228,8 @@ class MediaRecognizeShareService:
                     normalized_item.get("tmdbid"),
                     normalized_item.get("doubanid"),
                     normalized_item.get("bangumiid"),
+                    normalized_item.get("anilistid"),
+                    normalized_item.get("media_id"),
                 ]
         ):
             return {"code": 1, "message": "至少需要一个有效的媒体ID"}
