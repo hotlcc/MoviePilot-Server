@@ -6,51 +6,37 @@ from typing import Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_manager
+from app.core.media import resolve_media_identity
 from app.models import SubscribeStatistics
 from app.schemas.models import SubscribeStatisticItem, SortType
-from app.services.tmdb import tmdb_service
 
 
 class SubscribeService:
     """订阅统计服务类"""
 
     @staticmethod
+    def _fill_media_identity(
+            subscribe: SubscribeStatisticItem,
+    ) -> tuple[str | None, str | None]:
+        """规范化统计项主身份，并兼容旧客户端的分数据源 ID。"""
+        media_source, media_id = resolve_media_identity(subscribe)
+        subscribe.media_source = media_source
+        subscribe.media_id = media_id
+        return media_source, media_id
+
+    @staticmethod
     async def add_subscribe(db: AsyncSession, subscribe: SubscribeStatisticItem) -> Dict[str, Any]:
         """添加订阅统计"""
-        # 如果没有tmdbid或类型则直接拒绝不统计
-        if (not subscribe.tmdbid
-                or not subscribe.type
-                or not subscribe.poster
-                or not subscribe.poster.startswith("http")):
+        media_source, media_id = SubscribeService._fill_media_identity(subscribe)
+        if not media_source or not media_id or not subscribe.type or not subscribe.name:
             return {"code": 1, "message": "元数据不完整"}
-        # 如果没有genre_ids，则查询TheMovieDB获取
-        if not subscribe.genre_ids:
-            try:
-                tmdb_info = await tmdb_service.get_media_info(subscribe.tmdbid, subscribe.type)
-                if not tmdb_info or not tmdb_info.get("genre_ids"):
-                    return {"code": 1, "message": "无法获取媒体类型或分类信息"}
-                # 更新信息
-                subscribe.genre_ids = tmdb_info["genre_ids"]
-                if not subscribe.name and tmdb_info.get("name"):
-                    subscribe.name = tmdb_info["name"]
-                if not subscribe.year and tmdb_info.get("year"):
-                    subscribe.year = tmdb_info["year"]
-                if not subscribe.poster and tmdb_info.get("poster"):
-                    subscribe.poster = tmdb_info["poster"]
-                if not subscribe.backdrop and tmdb_info.get("backdrop"):
-                    subscribe.backdrop = tmdb_info["backdrop"]
-                if not subscribe.vote and tmdb_info.get("vote"):
-                    subscribe.vote = tmdb_info["vote"]
-                if not subscribe.description and tmdb_info.get("description"):
-                    subscribe.description = tmdb_info["description"]
-            except Exception as e:
-                return {"code": 1, "message": f"获取媒体信息失败: {str(e)}"}
 
         # 查询数据库中是否存在
         sub = await SubscribeStatistics.read(
             db,
-            mid=subscribe.tmdbid or subscribe.doubanid,
-            season=subscribe.season
+            media_source=media_source,
+            media_id=media_id,
+            season=subscribe.season,
         )
 
         # 如果不存在则创建
@@ -59,18 +45,24 @@ class SubscribeService:
             await sub.create(db)
         # 如果存在则更新
         else:
-            await sub.update(db, {"count": sub.count + 1})
+            await sub.update(db, {"count": (sub.count or 0) + 1})
+
+        cache_manager.statistic_cache.clear()
 
         return {"code": 0, "message": "success"}
 
     @staticmethod
     async def done_subscribe(db: AsyncSession, subscribe: SubscribeStatisticItem) -> Dict[str, Any]:
         """完成订阅更新统计"""
+        media_source, media_id = SubscribeService._fill_media_identity(subscribe)
+        if not media_source or not media_id:
+            return {"code": 1, "message": "媒体身份不完整"}
         # 查询数据库中是否存在
         sub = await SubscribeStatistics.read(
             db,
-            mid=subscribe.tmdbid or subscribe.doubanid,
-            season=subscribe.season
+            media_source=media_source,
+            media_id=media_id,
+            season=subscribe.season,
         )
 
         # 如果存在则更新
@@ -80,47 +72,32 @@ class SubscribeService:
             else:
                 await sub.update(db, {"count": sub.count - 1})
 
+        cache_manager.statistic_cache.clear()
+
         return {"code": 0, "message": "success"}
 
     @staticmethod
     async def batch_report_subscribes(db: AsyncSession, subscribes: List[SubscribeStatisticItem]) -> Dict[str, Any]:
         """批量添加订阅统计"""
         for subscribe in subscribes:
-            if not subscribe.tmdbid or not subscribe.type:
+            media_source, media_id = SubscribeService._fill_media_identity(subscribe)
+            if not media_source or not media_id or not subscribe.type or not subscribe.name:
                 continue
-            if not subscribe.genre_ids:
-                try:
-                    tmdb_info = await tmdb_service.get_media_info(subscribe.tmdbid, subscribe.type)
-                    if not tmdb_info or not tmdb_info.get("genre_ids"):
-                        continue
-                    subscribe.genre_ids = tmdb_info["genre_ids"]
-                    if not subscribe.name and tmdb_info.get("name"):
-                        subscribe.name = tmdb_info["name"]
-                    if not subscribe.year and tmdb_info.get("year"):
-                        subscribe.year = tmdb_info["year"]
-                    if not subscribe.poster and tmdb_info.get("poster"):
-                        subscribe.poster = tmdb_info["poster"]
-                    if not subscribe.backdrop and tmdb_info.get("backdrop"):
-                        subscribe.backdrop = tmdb_info["backdrop"]
-                    if not subscribe.vote and tmdb_info.get("vote"):
-                        subscribe.vote = tmdb_info["vote"]
-                    if not subscribe.description and tmdb_info.get("description"):
-                        subscribe.description = tmdb_info["description"]
-                except Exception:
-                    continue
 
             sub = await SubscribeStatistics.read(
                 db,
-                mid=subscribe.tmdbid or subscribe.doubanid,
-                season=subscribe.season
+                media_source=media_source,
+                media_id=media_id,
+                season=subscribe.season,
             )
             if not sub:
                 sub = SubscribeStatistics(**subscribe.model_dump(), count=1)
                 db.add(sub)
             else:
-                sub.count = sub.count + 1
+                sub.count = (sub.count or 0) + 1
 
         await db.commit()
+        cache_manager.statistic_cache.clear()
         return {"code": 0, "message": "success"}
 
     @staticmethod

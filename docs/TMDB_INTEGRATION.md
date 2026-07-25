@@ -1,76 +1,51 @@
-# TheMovieDB集成功能
+# 多媒体数据源与 TMDB 辅助信息
 
-## 功能说明
+## 数据边界
 
-订阅统计和订阅分享新增接口现在支持自动从TheMovieDB获取genre_id信息。
+MoviePilot-Server 不再把订阅统计、订阅分享或共享识别结果转换为 TMDB
+数据，也不会因缺少 `tmdbid`、`genre_ids` 或 TMDB 图片而调用 TMDB API。
+服务端按客户端上报的原识别源存储和展示数据。
 
-## 配置
+媒体主身份由以下两个字段组成：
 
-系统已内置默认的TheMovieDB API密钥 (`db55323b8d3e4154498498a75642b381`)，无需额外配置即可使用。
+- `media_source`：`themoviedb`、`douban`、`bangumi`、`anilist` 或插件自定义源。
+- `media_id`：对应数据源的原生 ID，统一按字符串存储。
 
-如果需要使用自己的API密钥，可以在环境变量或`.env`文件中设置：
+`tmdbid`、`doubanid`、`bangumiid`、`anilistid` 是兼容和辅助字段，不参与
+跨数据源合并。旧客户端未上报统一身份时，服务端按上述顺序选择首个有效 ID
+回填 `media_source + media_id`。
 
-```bash
-TMDB_API_KEY=your_custom_tmdb_api_key_here
-```
+## 客户端处理
 
-## 功能特性
+- 添加订阅时保留原识别源，不额外请求 TMDB。
+- 下载需要按媒体类别选择目录或下载器分类，因此在目录解析前补充 TMDB 辅数据。
+- 整理在目标目录分类和刮削前补充 TMDB 辅数据；启用自动类别目录但无法获得
+  TMDB 分类时中断整理并返回明确错误。
+- TMDB 补充只写入辅助 ID、`tmdb_info`、类型 ID 和缺失的外部 ID，不覆盖原
+  识别源的标题、年份、季号、图片或主身份。
 
-### Genre IDs格式说明
+## 订阅统计
 
-TheMovieDB API返回的genres信息格式：
-- **API响应**：`genres` 数组，每个元素包含 `id` 和 `name` 字段
-- **存储格式**：提取所有 `id` 并用逗号连接，如 `"18,53"`（对应 Drama, Thriller）
-- **示例**：电影《搏击俱乐部》的genre_ids为 `"18,53"`
+`/subscribe/add`、`/subscribe/done` 和 `/subscribe/report` 按
+`media_source + media_id + season` 定位记录。不同数据源即使原生 ID 数值相同也
+不会合并，第 0 季会作为有效季号单独统计。
 
-### 1. 订阅统计接口 (`/subscribe/add`)
+`genre_ids`、海报、背景图、评分和简介均为可选上报字段。缺失时服务端原样保存
+空值，不再尝试从 TMDB 补齐。
 
-当添加订阅统计时，如果：
-- 没有提供`genre_ids`
-- 但提供了`tmdbid`和`type`
+## 订阅分享
 
-系统会自动调用TheMovieDB API获取：
-- `genre_ids` - 类型ID列表（逗号分隔的字符串格式，如 "18,53"）
-- `name` - 媒体名称（如果缺失）
-- `year` - 年份（如果缺失）
-- `poster` - 海报URL（如果缺失）
-- `backdrop` - 背景图URL（如果缺失）
-- `vote` - 评分（如果缺失）
-- `description` - 简介（如果缺失）
+`/subscribe/share` 保存分享者上报的原识别源及其原生 ID，查询接口也原样返回。
+复用分享的客户端负责按 `media_source + media_id` 重新识别，并在后续下载或整理
+阶段按需补充 TMDB 辅数据。
 
-### 2. 订阅分享接口 (`/subscribe/share`)
+## 共享识别
 
-当创建订阅分享时，如果：
-- 没有提供`genre_ids`
-- 但提供了`tmdbid`和`type`
+`/recognize/share` 支持 TMDB、豆瓣、Bangumi、AniList 和插件自定义源，并返回
+原始 `media_source + media_id`。缓存键保留电视剧第 0 季，避免特别季与未指定季
+的记录冲突。
 
-系统会自动调用TheMovieDB API获取上述信息（包括逗号分隔的genre_ids格式）。
+## 数据库升级
 
-## API接口
-
-### TheMovieDB服务类
-
-```python
-from app.services.tmdb import tmdb_service
-
-# 获取媒体完整信息
-media_info = await tmdb_service.get_media_info(tmdb_id, media_type)
-
-# 仅获取genre_ids
-genre_ids = await tmdb_service.get_genre_ids(tmdb_id, media_type)
-```
-
-## 错误处理
-
-- 如果TheMovieDB API调用失败，不会影响正常的订阅/分享流程
-- 错误信息会记录到控制台日志中
-- 系统会继续使用原始数据创建记录
-
-## 依赖
-
-新增依赖包：
-- `aiohttp>=3.8.0` - 用于异步HTTP请求
-
-## 测试
-
-系统已配置默认API密钥，可以直接使用TheMovieDB集成功能，无需额外配置。
+服务启动时会幂等补齐统计和分享表的多数据源字段及索引，并根据存量兼容 ID
+回填统一身份。SQLite 和 PostgreSQL 使用相同的升级语义。
