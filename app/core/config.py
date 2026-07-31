@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     REDIS_SSL: bool = False
     REDIS_MAX_CONNECTIONS: int = 50
+    REDIS_POOL_TIMEOUT: float = 1.0
     REDIS_CONNECT_TIMEOUT: int = 5
     REDIS_SOCKET_TIMEOUT: int = 5
     REDIS_KEY_PREFIX: str = "moviepilot"
@@ -52,6 +53,7 @@ class Settings(BaseSettings):
     SERVER_BACKLOG: int = 4096
     SERVER_LIMIT_CONCURRENCY: int = 0
     SERVER_TIMEOUT_KEEP_ALIVE: int = 30
+    SERVER_ACCESS_LOG: bool = False
 
     # TheMovieDB API配置
     TMDB_API_KEY: str = "db55323b8d3e4154498498a75642b381"

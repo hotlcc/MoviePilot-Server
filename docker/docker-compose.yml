@@ -79,8 +79,11 @@ services:
             - REDIS_PORT=6380
             - REDIS_DB=0
             - REDIS_PASSWORD=${REDIS_PASSWORD:-moviepilot_redis_password}
+            - REDIS_POOL_TIMEOUT=1
             - SERVER_WORKERS=4
             - SERVER_BACKLOG=4096
+            - SERVER_LIMIT_CONCURRENCY=512
+            - SERVER_ACCESS_LOG=false
         ports:
             - target: 3001
               published: 3001
@@ -90,6 +93,11 @@ services:
         depends_on:
             - postgres
             - redis
+        logging:
+            driver: json-file
+            options:
+                max-size: "10m"
+                max-file: "5"
         restart: always
 
     cookiecloud:

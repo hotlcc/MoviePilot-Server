@@ -4,8 +4,9 @@ FastAPI应用主文件
 import logging
 from contextlib import asynccontextmanager
 
-from starlette.background import BackgroundTask
 from fastapi import FastAPI
+from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.api import api_router
 from app.core.config import settings
@@ -36,9 +37,11 @@ async def lifespan(_: FastAPI):
     await init_redis()
     await media_recognize_share_service.start()
     await data_cleanup_service.start()
+    await RequestUserStatisticService.start()
 
     yield
     # 关闭时清理资源
+    await RequestUserStatisticService.stop()
     await data_cleanup_service.stop()
     await media_recognize_share_service.stop()
     await tmdb_service.close()
@@ -55,37 +58,39 @@ App = FastAPI(
     lifespan=lifespan
 )
 
+class RequestUserStatisticMiddleware:
+    """在成功响应完成后将请求用户加入异步统计队列。"""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        if RequestUserStatisticService.should_skip_request(request):
+            await self.app(scope, receive, send)
+            return
+
+        status_code = 500
+
+        async def capture_status(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        await self.app(scope, receive, capture_status)
+        if status_code < 400:
+            RequestUserStatisticService.enqueue_request_user(request)
+
+
+App.add_middleware(RequestUserStatisticMiddleware)
+
 # 包含API路由（去掉全局前缀，直接挂载到根路径）
 App.include_router(api_router)
-
-
-@App.middleware("http")
-async def record_request_user_middleware(request, call_next):
-    """
-    记录经过服务端接口的请求用户数量。
-    """
-    response = await call_next(request)
-    if response.status_code >= 400 or RequestUserStatisticService.should_skip_request(request):
-        return response
-
-    if response.background:
-        original_background = response.background
-
-        async def record_with_original_background():
-            """
-            先执行原响应后台任务，再登记请求用户统计。
-            """
-            await original_background()
-            await RequestUserStatisticService.safe_record_request_user(request)
-
-        response.background = BackgroundTask(record_with_original_background)
-    else:
-        response.background = BackgroundTask(
-            RequestUserStatisticService.safe_record_request_user,
-            request,
-        )
-
-    return response
 
 
 @App.get("/")
@@ -108,5 +113,6 @@ if __name__ == '__main__':
         workers=settings.server_workers,
         backlog=settings.SERVER_BACKLOG,
         limit_concurrency=settings.server_limit_concurrency,
-        timeout_keep_alive=settings.SERVER_TIMEOUT_KEEP_ALIVE
+        timeout_keep_alive=settings.SERVER_TIMEOUT_KEEP_ALIVE,
+        access_log=settings.SERVER_ACCESS_LOG,
     )

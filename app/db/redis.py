@@ -4,7 +4,7 @@ Redis连接管理
 import logging
 from typing import Optional
 
-from redis.asyncio import Redis
+from redis.asyncio import BlockingConnectionPool, Redis
 
 from app.core.config import settings
 
@@ -19,19 +19,21 @@ async def init_redis() -> Redis:
     if redis_client is not None:
         return redis_client
 
-    client = Redis.from_url(
+    pool = BlockingConnectionPool.from_url(
         settings.redis_url,
         encoding="utf-8",
         decode_responses=True,
         max_connections=settings.REDIS_MAX_CONNECTIONS,
+        timeout=settings.REDIS_POOL_TIMEOUT,
         socket_connect_timeout=settings.REDIS_CONNECT_TIMEOUT,
         socket_timeout=settings.REDIS_SOCKET_TIMEOUT,
     )
+    client = Redis(connection_pool=pool)
 
     try:
         await client.ping()
     except Exception as err:
-        await client.aclose()
+        await client.aclose(close_connection_pool=True)
         logger.error(f"Redis connection init failed: {err}")
         raise
 
@@ -53,5 +55,5 @@ async def close_redis():
     if redis_client is None:
         return
 
-    await redis_client.aclose()
+    await redis_client.aclose(close_connection_pool=True)
     redis_client = None
