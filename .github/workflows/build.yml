@@ -10,6 +10,11 @@ on:
       - .github/workflows/build.yml
       - requirements.txt
       - main.py
+
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,6 +40,14 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       -
+        name: Login GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      -
         name: Buildx
         uses: docker/build-push-action@v2
         with:
@@ -46,3 +59,4 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/moviepilot-server:latest
+            ghcr.io/jxxghp/moviepilot-server:latest
