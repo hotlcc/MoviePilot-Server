@@ -5,6 +5,7 @@ from fastapi import APIRouter
 
 from app.api import (
     media_recognize_share,
+    plugin_rating,
     plugin_statistic,
     subscribe_statistic,
     subscribe_share,
@@ -18,6 +19,7 @@ api_router = APIRouter()
 
 # 包含各个模块的路由
 api_router.include_router(plugin_statistic.router, prefix="/plugin", tags=["plugin-statistic"])
+api_router.include_router(plugin_rating.router, prefix="/plugin", tags=["plugin-rating"])
 api_router.include_router(subscribe_statistic.router, prefix="/subscribe", tags=["subscribe-statistic"])
 api_router.include_router(subscribe_share.router, prefix="/subscribe", tags=["subscribe-share"])
 api_router.include_router(workflow_share.router, prefix="/workflow", tags=["workflow-share"])

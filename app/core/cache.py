@@ -11,6 +11,9 @@ class CacheManager:
         # 统计缓存
         self.statistic_cache = Cache(maxsize=128, ttl=1800)
 
+        # 插件评分公共汇总缓存
+        self.plugin_rating_cache = Cache(maxsize=2048, ttl=1800)
+
         # 安装版本统计报表缓存
         self.usage_statistic_cache = Cache(maxsize=32, ttl=1800)
 
@@ -23,6 +26,7 @@ class CacheManager:
     def clear_all(self):
         """清除所有缓存"""
         self.statistic_cache.clear()
+        self.plugin_rating_cache.clear()
         self.usage_statistic_cache.clear()
         self.share_cache.clear()
         self.workflow_share_cache.clear()

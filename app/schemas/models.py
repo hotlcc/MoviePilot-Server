@@ -4,7 +4,7 @@ Pydantic模型定义
 from typing import List, Optional
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SortType(str, Enum):
@@ -23,6 +23,19 @@ class PluginStatisticItem(BaseModel):
 class PluginStatisticList(BaseModel):
     """插件统计列表"""
     plugins: List[PluginStatisticItem]
+
+
+class PluginRatingItem(BaseModel):
+    """插件评分请求"""
+    rating: float = Field(ge=0.1, le=5.0, multiple_of=0.1)
+
+
+class PluginRatingResult(BaseModel):
+    """插件评分结果"""
+    plugin_id: str
+    average_rating: float = 0.0
+    rating_count: int = 0
+    user_rating: Optional[float] = None
 
 
 class UsageStatisticItem(BaseModel):

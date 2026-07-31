@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - app/**
       - docker/Dockerfile
       - .github/workflows/build.yml
       - requirements.txt
