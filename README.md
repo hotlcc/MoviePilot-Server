@@ -46,32 +46,6 @@ PostgreSQL、Redis 和服务端的完整编排示例见 [docker/docker-compose.y
 
 应用启动时会自动检查并创建缺失的数据表。默认监听 `0.0.0.0:3001`。
 
-## 插件评分 API
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/plugin/rating?plugin_ids=PluginA,PluginB` | 批量查询指定插件评分；不传参数时查询已有评分汇总 |
-| `GET` | `/plugin/rating/{plugin_id}` | 查询单个插件平均分、评分人数和当前实例评分 |
-| `POST` | `/plugin/rating/{plugin_id}` | 新增或更新当前 MoviePilot 实例的评分 |
-
-查询或提交当前实例评分时使用请求头：
-
-```text
-X-MoviePilot-User-Uid: <stable-installation-id>
-```
-
-提交示例：
-
-```json
-{
-  "rating": 4.5
-}
-```
-
-评分范围为 `0.1` 至 `5.0`，精确到 `0.1`。同一插件和安装实例只保留一条评分明细，再次提交会更新原记录。服务端同时持久化每个插件的平均分与评分人数，并对公共汇总和实例评分使用 30 分钟内存缓存；写入后会精确失效或刷新对应缓存。
-
-Nginx 示例配置中的 `/plugin/` 代理会覆盖插件统计和插件评分的全部接口，参见 [docker/nginx.conf](docker/nginx.conf)。
-
 ## 常用配置
 
 | 环境变量 | 默认值 | 说明 |
