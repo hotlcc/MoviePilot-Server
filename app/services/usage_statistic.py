@@ -1,7 +1,6 @@
 """
 安装版本统计服务
 """
-import logging
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict
@@ -12,9 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cache import cache_manager
 from app.models import UsageStatistics
 from app.schemas.models import UsageStatisticItem
-from app.services.request_user_statistic import RequestUserStatisticService
-
-logger = logging.getLogger(__name__)
 
 
 class UsageService:
@@ -42,31 +38,14 @@ class UsageService:
         }
 
     @staticmethod
-    def _build_statistics_response(base_data: Dict[str, Any], other_users: int) -> Dict[str, Any]:
+    def _should_record_usage(usage: UsageStatisticItem) -> bool:
         """
-        将请求来源统计合并到安装版本统计报表。
+        判断上报是否同时包含用户 ID 和至少一个版本号。
         """
-        reported_users = base_data.get("reported_users") or 0
-        backend_versions = list(base_data.get("backend_versions") or [])
-        frontend_versions = list(base_data.get("frontend_versions") or [])
-
-        if other_users > 0:
-            backend_versions.append({
-                "version": "未知",
-                "count": other_users,
-            })
-            frontend_versions.append({
-                "version": "未知",
-                "count": other_users,
-            })
-
-        return {
-            **base_data,
-            "total_users": reported_users + other_users,
-            "other_users": other_users,
-            "backend_versions": backend_versions,
-            "frontend_versions": frontend_versions,
-        }
+        user_uid = (usage.user_uid or "").strip()
+        backend_version = (usage.backend_version or "").strip()
+        frontend_version = (usage.frontend_version or "").strip()
+        return bool(user_uid and (backend_version or frontend_version))
 
     @staticmethod
     def _invalidate_statistics_cache() -> None:
@@ -82,17 +61,6 @@ class UsageService:
 
         cache_manager.usage_statistic_cache.clear()
         UsageService._last_statistics_cache_invalidated_at = now
-
-    @staticmethod
-    async def _count_other_users() -> int:
-        """
-        读取尚未上报安装版本的未知用户数量。
-        """
-        try:
-            return await RequestUserStatisticService.count_other_users()
-        except Exception as err:
-            logger.warning(f"Count other usage users skipped: {err}")
-            return 0
 
     @staticmethod
     async def _record_usage(db: AsyncSession, usage: UsageStatisticItem, now: str) -> None:
@@ -122,9 +90,11 @@ class UsageService:
     async def report_usage(
             db: AsyncSession,
             usage: UsageStatisticItem,
-            request=None,
     ) -> Dict[str, Any]:
         """上报安装版本统计"""
+        if not UsageService._should_record_usage(usage):
+            return {"code": 0, "message": "success"}
+
         now = UsageService._now()
         try:
             await UsageService._record_usage(db, usage, now)
@@ -133,11 +103,6 @@ class UsageService:
             await db.rollback()
             await UsageService._record_usage(db, usage, now)
             await db.commit()
-
-        try:
-            await RequestUserStatisticService.mark_request_user_reported(request, usage.user_uid)
-        except Exception as err:
-            logger.warning(f"Mark request user reported skipped: {err}")
 
         UsageService._invalidate_statistics_cache()
         return {"code": 0, "message": "success"}
@@ -148,8 +113,7 @@ class UsageService:
         cache_key = "usage_versions"
         cached_data = cache_manager.usage_statistic_cache.get(cache_key)
         if cached_data is not None:
-            other_users = await UsageService._count_other_users()
-            return UsageService._build_statistics_response(cached_data, other_users)
+            return cached_data
 
         now = datetime.now()
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -158,15 +122,8 @@ class UsageService:
 
         backend_versions = await UsageStatistics.list_backend_version_counts(db)
         frontend_versions = await UsageStatistics.list_frontend_version_counts(db)
-        total_reported_users = await UsageStatistics.count_all(db)
-        normalized_backend_versions = [
-            UsageService._normalize_version_count(row) for row in backend_versions
-        ]
-        normalized_frontend_versions = [
-            UsageService._normalize_version_count(row) for row in frontend_versions
-        ]
         cached_data = {
-            "reported_users": total_reported_users,
+            "total_users": await UsageStatistics.count_all(db),
             "active_users": {
                 "today": await UsageStatistics.count_active_since(
                     db, today.strftime("%Y-%m-%d %H:%M:%S")
@@ -178,11 +135,14 @@ class UsageService:
                     db, last_30_days.strftime("%Y-%m-%d %H:%M:%S")
                 ),
             },
-            "backend_versions": normalized_backend_versions,
-            "frontend_versions": normalized_frontend_versions,
+            "backend_versions": [
+                UsageService._normalize_version_count(row) for row in backend_versions
+            ],
+            "frontend_versions": [
+                UsageService._normalize_version_count(row) for row in frontend_versions
+            ],
             "updated_at": UsageService._now(),
             "cache_ttl": 1800,
         }
         cache_manager.usage_statistic_cache.set(cache_key, cached_data)
-        other_users = await UsageService._count_other_users()
-        return UsageService._build_statistics_response(cached_data, other_users)
+        return cached_data

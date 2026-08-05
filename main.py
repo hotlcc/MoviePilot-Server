@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from redis.exceptions import ConnectionError as RedisConnectionError
 from starlette.requests import Request
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.api import api_router
 from app.core.config import settings
@@ -18,7 +17,6 @@ from app.models import Base
 from app.services.data_cleanup import data_cleanup_service
 from app.services.database_schema import ensure_database_schema
 from app.services.media_recognize_share import media_recognize_share_service
-from app.services.request_user_statistic import RequestUserStatisticService
 from app.services.tmdb import tmdb_service
 
 logger = logging.getLogger(__name__)
@@ -39,11 +37,9 @@ async def lifespan(_: FastAPI):
     await init_redis()
     await media_recognize_share_service.start()
     await data_cleanup_service.start()
-    await RequestUserStatisticService.start()
 
     yield
     # 关闭时清理资源
-    await RequestUserStatisticService.stop()
     await data_cleanup_service.stop()
     await media_recognize_share_service.stop()
     await tmdb_service.close()
@@ -77,37 +73,6 @@ async def redis_connection_error_handler(
         },
     )
 
-
-class RequestUserStatisticMiddleware:
-    """在成功响应完成后将请求用户加入异步统计队列。"""
-
-    def __init__(self, app: ASGIApp):
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        request = Request(scope)
-        if RequestUserStatisticService.should_skip_request(request):
-            await self.app(scope, receive, send)
-            return
-
-        status_code = 500
-
-        async def capture_status(message):
-            nonlocal status_code
-            if message["type"] == "http.response.start":
-                status_code = message["status"]
-            await send(message)
-
-        await self.app(scope, receive, capture_status)
-        if status_code < 400:
-            RequestUserStatisticService.enqueue_request_user(request)
-
-
-App.add_middleware(RequestUserStatisticMiddleware)
 
 # 包含API路由（去掉全局前缀，直接挂载到根路径）
 App.include_router(api_router)

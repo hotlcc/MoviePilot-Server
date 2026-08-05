@@ -40,7 +40,7 @@ class PluginRatingResult(BaseModel):
 
 class UsageStatisticItem(BaseModel):
     """安装版本统计项"""
-    user_uid: str
+    user_uid: Optional[str] = None
     backend_version: Optional[str] = None
     frontend_version: Optional[str] = None
     version_flag: Optional[str] = None
