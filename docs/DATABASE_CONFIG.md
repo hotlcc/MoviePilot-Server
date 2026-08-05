@@ -44,13 +44,13 @@ DB_USER=postgres      # 数据库用户名
 DB_PASSWORD=postgres  # 数据库密码
 ```
 
-连接池默认按每个 worker 独立创建，4 个 worker 时默认最多使用 `4 * (DB_POOL_SIZE + DB_MAX_OVERFLOW)` 个 PostgreSQL 连接。当前默认值适合 4 核机器上几千个客户端连接的常见 API 场景，总上限为 80 个数据库连接：
+连接池默认按每个 worker 独立创建，4 个 worker 时默认最多使用 `4 * (DB_POOL_SIZE + DB_MAX_OVERFLOW)` 个 PostgreSQL 连接。当前默认值最多占用 48 个连接，为 PostgreSQL 的管理连接和其他服务保留余量：
 
 ```bash
-DB_POOL_SIZE=15      # 每个 worker 常驻连接数
-DB_MAX_OVERFLOW=5    # 每个 worker 临时溢出连接数
-DB_POOL_TIMEOUT=180
-DB_POOL_RECYCLE=3600
+DB_POOL_SIZE=8       # 每个 worker 常驻连接数
+DB_MAX_OVERFLOW=4    # 每个 worker 临时溢出连接数
+DB_POOL_TIMEOUT=30   # 等待连接的最长秒数
+DB_POOL_RECYCLE=1800 # 连接最长复用时间（秒）
 ```
 
 ## 服务启动配置
@@ -61,12 +61,12 @@ DB_POOL_RECYCLE=3600
 SERVER_WORKERS=4     # 优先使用
 WEB_CONCURRENCY=4    # 兼容常见部署平台变量
 SERVER_BACKLOG=4096
-SERVER_LIMIT_CONCURRENCY=0
+SERVER_LIMIT_CONCURRENCY=512
 SERVER_TIMEOUT_KEEP_ALIVE=5
 ```
 
 如果 PostgreSQL 的 `max_connections` 较小，需要同时降低 `SERVER_WORKERS`、`DB_POOL_SIZE` 或 `DB_MAX_OVERFLOW`。
-`SERVER_LIMIT_CONCURRENCY=0` 表示不主动限制单 worker 并发；接口延迟升高或数据库连接等待明显时，可以设置为 500-1000 做应用层排队保护。
+`SERVER_LIMIT_CONCURRENCY` 默认限制每个 worker 的并发请求数，避免请求洪峰占满 Redis/PostgreSQL 连接池。高并发部署可结合 worker 数量、数据库 `max_connections` 和实际流量调整；设置为 `0` 才表示不主动限制。
 
 ## Docker 部署
 
@@ -116,7 +116,8 @@ REDIS_DB=0
 REDIS_USERNAME=
 REDIS_PASSWORD=
 REDIS_SSL=false
-REDIS_MAX_CONNECTIONS=50
+REDIS_MAX_CONNECTIONS=100
+REDIS_POOL_TIMEOUT=1
 REDIS_CONNECT_TIMEOUT=5
 REDIS_SOCKET_TIMEOUT=5
 REDIS_KEY_PREFIX=moviepilot

@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     REDIS_USERNAME: str = ""
     REDIS_PASSWORD: str = ""
     REDIS_SSL: bool = False
-    REDIS_MAX_CONNECTIONS: int = 50
+    REDIS_MAX_CONNECTIONS: int = 100
     REDIS_POOL_TIMEOUT: float = 1.0
     REDIS_CONNECT_TIMEOUT: int = 5
     REDIS_SOCKET_TIMEOUT: int = 5
@@ -34,10 +34,10 @@ class Settings(BaseSettings):
     DB_NAME: str = "moviepilot"
     DB_USER: str = "postgres"
     DB_PASSWORD: str = "postgres"
-    DB_POOL_SIZE: int = 15
-    DB_MAX_OVERFLOW: int = 5
-    DB_POOL_TIMEOUT: int = 180
-    DB_POOL_RECYCLE: int = 3600
+    DB_POOL_SIZE: int = 8
+    DB_MAX_OVERFLOW: int = 4
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 1800
 
     # 应用配置
     APP_NAME: str = "MoviePilot Server"
@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     SERVER_WORKERS: int = 0
     WEB_CONCURRENCY: int = 0
     SERVER_BACKLOG: int = 4096
-    SERVER_LIMIT_CONCURRENCY: int = 0
-    SERVER_TIMEOUT_KEEP_ALIVE: int = 30
+    SERVER_LIMIT_CONCURRENCY: int = 512
+    SERVER_TIMEOUT_KEEP_ALIVE: int = 5
     SERVER_ACCESS_LOG: bool = False
 
     # TheMovieDB API配置

@@ -60,7 +60,15 @@ PostgreSQL、Redis 和服务端的完整编排示例见 [docker/docker-compose.y
 | `REDIS_HOST` | `localhost` | Redis 地址 |
 | `REDIS_PORT` | `6379` | Redis 端口 |
 | `REDIS_PASSWORD` | 空 | Redis 密码 |
+| `REDIS_MAX_CONNECTIONS` | `100` | 每个 worker 的 Redis 连接池上限 |
+| `REDIS_POOL_TIMEOUT` | `1` | Redis 连接池等待超时（秒） |
+| `DB_POOL_SIZE` | `8` | 每个 worker 的 PostgreSQL 常驻连接数 |
+| `DB_MAX_OVERFLOW` | `4` | 每个 worker 的 PostgreSQL 临时溢出连接数 |
+| `DB_POOL_TIMEOUT` | `30` | PostgreSQL 连接池等待超时（秒） |
+| `DB_POOL_RECYCLE` | `1800` | PostgreSQL 连接最长复用时间（秒） |
 | `SERVER_WORKERS` | 自动 | Uvicorn Worker 数量，自动模式最多使用 4 个 |
+| `SERVER_LIMIT_CONCURRENCY` | `512` | 每个 worker 的并发请求上限 |
+| `SERVER_TIMEOUT_KEEP_ALIVE` | `5` | HTTP Keep-Alive 超时（秒） |
 | `PORT` | `3001` | HTTP 监听端口 |
 | `MP_ADMIN_USERS` | 空 | 逗号分隔的管理员 GitHub 用户名 |
 
