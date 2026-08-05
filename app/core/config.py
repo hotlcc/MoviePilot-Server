@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     SERVER_WORKERS: int = 0
     WEB_CONCURRENCY: int = 0
     SERVER_BACKLOG: int = 4096
-    SERVER_LIMIT_CONCURRENCY: int = 512
+    SERVER_LIMIT_CONCURRENCY: int = 1024
     SERVER_TIMEOUT_KEEP_ALIVE: int = 5
     SERVER_ACCESS_LOG: bool = False
 
