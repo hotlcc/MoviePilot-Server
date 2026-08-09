@@ -125,6 +125,27 @@ def test_media_recognize_share_keeps_custom_source_and_season_zero() -> None:
     ).endswith("|0")
 
 
+def test_media_recognize_share_normalizes_music_type_without_season() -> None:
+    """音乐类型应被规范化且永不携带季信息，缓存键与影视类型隔离。"""
+    item = MediaRecognizeShareService._normalize_item_dict({
+        "keyword": "叶惠美",
+        "type": "音乐",
+        "media_source": "musicbrainz",
+        "media_id": "release-group-1",
+    })
+
+    assert item["type"] == "music"
+    assert item["season"] is None
+    assert item["media_source"] == "musicbrainz"
+    assert item["media_id"] == "release-group-1"
+    assert MediaRecognizeShareService._build_cache_key(
+        "叶惠美", "music"
+    ) == "叶惠美|music||"
+    assert MediaRecognizeShareService._build_cache_key(
+        "叶惠美", "movie"
+    ) != MediaRecognizeShareService._build_cache_key("叶惠美", "music")
+
+
 def test_schema_upgrade_adds_and_backfills_media_identity() -> None:
     """旧 SQLite 数据库启动时应自动补列，并按原有数据源 ID 回填。"""
 

@@ -80,6 +80,8 @@ class MediaRecognizeShareService:
             return "movie"
         if normalized in {"tv", "电视剧"}:
             return "tv"
+        if normalized in {"music", "音乐"}:
+            return "music"
         return None
 
     @classmethod
