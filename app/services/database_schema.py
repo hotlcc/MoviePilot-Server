@@ -9,18 +9,22 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 POSTGRESQL_SCHEMA_LOCK_ID = 2026052501
 
-MEDIA_IDENTITY_COLUMNS = {
+SUBSCRIBE_COMPAT_COLUMNS = {
     "SUBSCRIBE_STATISTICS": {
         "bangumiid": "INTEGER",
         "anilistid": "INTEGER",
         "media_source": "VARCHAR",
         "media_id": "VARCHAR",
+        "music_type": "VARCHAR",
+        "total_tracks": "INTEGER",
     },
     "SUBSCRIBE_SHARE": {
         "bangumiid": "INTEGER",
         "anilistid": "INTEGER",
         "media_source": "VARCHAR",
         "media_id": "VARCHAR",
+        "music_type": "VARCHAR",
+        "total_tracks": "INTEGER",
     },
 }
 
@@ -44,11 +48,11 @@ MEDIA_IDENTITY_INDEXES = {
 }
 
 
-def _ensure_media_identity_schema(connection: Connection) -> None:
-    """为存量数据库补齐多数据源字段、索引并回填统一媒体身份。"""
+def _ensure_subscribe_compat_schema(connection: Connection) -> None:
+    """为存量订阅表补齐跨版本字段、身份索引，并回填统一媒体身份。"""
     inspector = inspect(connection)
     table_names = set(inspector.get_table_names())
-    for table_name, columns in MEDIA_IDENTITY_COLUMNS.items():
+    for table_name, columns in SUBSCRIBE_COMPAT_COLUMNS.items():
         if table_name not in table_names:
             continue
         existing_columns = {
@@ -77,7 +81,7 @@ def _ensure_media_identity_schema(connection: Connection) -> None:
                 f'ON "{table_name}" ({column_sql})'
             ))
 
-    for table_name in MEDIA_IDENTITY_COLUMNS:
+    for table_name in SUBSCRIBE_COMPAT_COLUMNS:
         if table_name not in table_names:
             continue
         for source, id_field in (
@@ -106,7 +110,7 @@ async def ensure_database_schema(engine: AsyncEngine, base: Any, is_postgresql: 
 
     async with engine.begin() as conn:
         await conn.run_sync(base.metadata.create_all)
-        await conn.run_sync(_ensure_media_identity_schema)
+        await conn.run_sync(_ensure_subscribe_compat_schema)
 
 
 async def ensure_postgresql_schema(engine: AsyncEngine, base: Any) -> None:
@@ -119,4 +123,4 @@ async def ensure_postgresql_schema(engine: AsyncEngine, base: Any) -> None:
             {"lock_id": POSTGRESQL_SCHEMA_LOCK_ID},
         )
         await conn.run_sync(base.metadata.create_all)
-        await conn.run_sync(_ensure_media_identity_schema)
+        await conn.run_sync(_ensure_subscribe_compat_schema)

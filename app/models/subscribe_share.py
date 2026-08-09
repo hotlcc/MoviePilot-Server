@@ -40,6 +40,10 @@ class SubscribeShare(Base):
     anilistid = Column(Integer)
     media_source = Column(String, index=True)
     media_id = Column(String, index=True)
+    # 音乐实体类型，区分单曲和专辑
+    music_type = Column(String)
+    # 专辑总曲目数，用于整专订阅展示和复用
+    total_tracks = Column(Integer)
     # genre_ids,分隔
     genre_ids = Column(String)
     # 季号

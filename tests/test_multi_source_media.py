@@ -19,21 +19,32 @@ from app.services.subscribe_statistic import SubscribeService
 
 def test_schemas_keep_all_media_source_fields() -> None:
     """中心服务请求模型不得静默丢弃统一身份和扩展数据源 ID。"""
-    payload = {
+    identity_payload = {
         "bangumiid": 42,
         "anilistid": 84,
         "media_source": "plugin-anime",
         "media_id": "subject-126",
     }
+    subscribe_payload = {
+        **identity_payload,
+        "music_type": "album",
+        "total_tracks": 11,
+    }
 
-    assert SubscribeStatisticItem(**payload).model_dump().items() >= payload.items()
-    assert SubscribeShareItem(**payload).model_dump().items() >= payload.items()
+    assert (
+        SubscribeStatisticItem(**subscribe_payload).model_dump().items()
+        >= subscribe_payload.items()
+    )
+    assert (
+        SubscribeShareItem(**subscribe_payload).model_dump().items()
+        >= subscribe_payload.items()
+    )
     recognize = MediaRecognizeShareItem(
         keyword="Test",
         type="tv",
-        **payload,
+        **identity_payload,
     )
-    assert recognize.model_dump().items() >= payload.items()
+    assert recognize.model_dump().items() >= identity_payload.items()
 
 
 def test_statistics_separate_source_namespaces_and_keep_season_zero() -> None:
@@ -76,6 +87,38 @@ def test_statistics_separate_source_namespaces_and_keep_season_zero() -> None:
     asyncio.run(run_scenario())
 
 
+def test_statistics_keep_album_entity_and_track_count() -> None:
+    """专辑订阅统计必须保存实体类型和总曲目数，热门订阅复用时才能保持整专语义。"""
+
+    async def run_scenario() -> None:
+        """在隔离数据库中写入并读取专辑订阅统计。"""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            result = await SubscribeService.add_subscribe(
+                session,
+                SubscribeStatisticItem(
+                    name="叶惠美",
+                    type="音乐",
+                    media_source="musicbrainz",
+                    media_id="release-group-1",
+                    music_type="album",
+                    total_tracks=11,
+                ),
+            )
+            assert result["code"] == 0
+            record = (
+                await session.execute(select(SubscribeStatistics))
+            ).scalar_one()
+            assert record.music_type == "album"
+            assert record.total_tracks == 11
+        await engine.dispose()
+
+    asyncio.run(run_scenario())
+
+
 def test_share_keeps_original_source_without_tmdb() -> None:
     """无 TMDB ID 的分享应按分享者原始数据源保存和返回。"""
 
@@ -102,6 +145,38 @@ def test_share_keeps_original_source_without_tmdb() -> None:
             assert shares[0]["media_source"] == "plugin-metadata"
             assert shares[0]["media_id"] == "movie-7"
             assert shares[0]["tmdbid"] is None
+        await engine.dispose()
+
+    asyncio.run(run_scenario())
+
+
+def test_share_keeps_album_entity_and_track_count() -> None:
+    """专辑分享写入和读取时不得退化成单曲或丢失整专曲目数。"""
+
+    async def run_scenario() -> None:
+        """在隔离数据库中创建并读取音乐专辑分享。"""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            result = await SubscribeShareService.create_share(
+                session,
+                SubscribeShareItem(
+                    share_title="整张专辑分享",
+                    share_user="tester",
+                    name="叶惠美",
+                    type="音乐",
+                    media_source="musicbrainz",
+                    media_id="release-group-1",
+                    music_type="album",
+                    total_tracks=11,
+                ),
+            )
+            assert result["code"] == 0
+            shares = await SubscribeShareService.get_shares(session)
+            assert shares[0]["music_type"] == "album"
+            assert shares[0]["total_tracks"] == 11
         await engine.dispose()
 
     asyncio.run(run_scenario())
@@ -186,7 +261,19 @@ def test_schema_upgrade_adds_and_backfills_media_identity() -> None:
                     )
                 }
             )
-            assert {"bangumiid", "anilistid", "media_source", "media_id"} <= columns
+            assert {
+                "bangumiid", "anilistid", "media_source", "media_id",
+                "music_type", "total_tracks",
+            } <= columns
+            share_columns = await connection.run_sync(
+                lambda sync_connection: {
+                    column["name"]
+                    for column in inspect(sync_connection).get_columns(
+                        "SUBSCRIBE_SHARE"
+                    )
+                }
+            )
+            assert {"music_type", "total_tracks"} <= share_columns
             row = (
                 await connection.execute(text(
                     'SELECT media_source, media_id FROM "SUBSCRIBE_STATISTICS" '

@@ -61,6 +61,8 @@ class SubscribeStatisticItem(BaseModel):
     anilistid: Optional[int] = None
     media_source: Optional[str] = None
     media_id: Optional[str] = None
+    music_type: Optional[str] = None
+    total_tracks: Optional[int] = None
     genre_ids: Optional[str] = None
     season: Optional[int] = None
     poster: Optional[str] = None
@@ -93,6 +95,8 @@ class SubscribeShareItem(BaseModel):
     anilistid: Optional[int] = None
     media_source: Optional[str] = None
     media_id: Optional[str] = None
+    music_type: Optional[str] = None
+    total_tracks: Optional[int] = None
     season: Optional[int] = None
     poster: Optional[str] = None
     backdrop: Optional[str] = None
