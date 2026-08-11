@@ -150,6 +150,7 @@ class MediaRecognizeShareItem(BaseModel):
     anilistid: Optional[int] = None
     media_source: Optional[str] = None
     media_id: Optional[str] = None
+    music_type: Optional[str] = None
     title: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

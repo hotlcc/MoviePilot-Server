@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 class MediaRecognizeShareService:
     """共享媒体识别服务类"""
 
+    _music_entity_types = frozenset({"recording", "album", "artist"})
+
     def __init__(self):
         self._started = False
 
@@ -37,6 +39,7 @@ class MediaRecognizeShareService:
             media_type: Optional[str],
             year: Optional[str] = None,
             season: Optional[int] = None,
+            music_type: Optional[str] = None,
     ) -> Optional[str]:
         """
         构造共享识别项的Redis缓存键。
@@ -46,6 +49,7 @@ class MediaRecognizeShareService:
             media_type=media_type,
             year=year,
             season=season,
+            music_type=music_type,
         )
         return cache_key
 
@@ -102,12 +106,27 @@ class MediaRecognizeShareService:
         return season_value if season_value >= 0 else None
 
     @classmethod
+    def _normalize_music_type(
+            cls,
+            media_type: Optional[str],
+            music_type: Optional[str],
+    ) -> Optional[str]:
+        """规范化音乐实体类型；旧客户端未传时按自动识别的单曲语义兼容。"""
+        if cls._normalize_media_type(media_type) != "music":
+            return None
+        if music_type in (None, ""):
+            return "recording"
+        normalized = str(music_type).strip().lower()
+        return normalized if normalized in cls._music_entity_types else None
+
+    @classmethod
     def _build_cache_key(
             cls,
             keyword: Optional[str],
             media_type: Optional[str],
             year: Optional[str] = None,
             season: Optional[int] = None,
+            music_type: Optional[str] = None,
     ) -> Optional[str]:
         """
         构造缓存主键
@@ -119,7 +138,25 @@ class MediaRecognizeShareService:
         year_key = cls._normalize_year(year) or ""
         normalized_season = cls._normalize_season(type_key, season)
         season_key = "" if normalized_season is None else str(normalized_season)
-        return f"{keyword_key}|{type_key}|{year_key}|{season_key}"
+        cache_key = f"{keyword_key}|{type_key}|{year_key}|{season_key}"
+        normalized_music_type = cls._normalize_music_type(type_key, music_type)
+        if type_key == "music" and not normalized_music_type:
+            return None
+        if normalized_music_type:
+            cache_key = f"{cache_key}|{normalized_music_type}"
+        return cache_key
+
+    @classmethod
+    def _build_legacy_music_cache_key(
+            cls,
+            keyword: Optional[str],
+            year: Optional[str] = None,
+    ) -> Optional[str]:
+        """构造旧版无实体维度的音乐缓存键，仅用于兼容读取历史单曲记录。"""
+        keyword_key = cls._normalize_keyword(keyword)
+        if not keyword_key:
+            return None
+        return f"{keyword_key}|music|{cls._normalize_year(year) or ''}|"
 
     @classmethod
     def _normalize_item_dict(cls, item: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -133,11 +170,15 @@ class MediaRecognizeShareService:
             media_type=media_type,
             year=item.get("year"),
             season=item.get("season"),
+            music_type=item.get("music_type"),
         )
         if not cache_key:
             return None
 
         season = cls._normalize_season(media_type, item.get("season"))
+        music_type = cls._normalize_music_type(media_type, item.get("music_type"))
+        if media_type == "music" and not music_type:
+            return None
         doubanid = item.get("doubanid")
         title = item.get("title")
         media_source, media_id = resolve_media_identity(item)
@@ -153,6 +194,7 @@ class MediaRecognizeShareService:
             "anilistid": item.get("anilistid"),
             "media_source": media_source,
             "media_id": media_id,
+            "music_type": music_type,
             "title": str(title).strip() if title else None,
             "created_at": item.get("created_at"),
             "updated_at": item.get("updated_at"),
@@ -241,6 +283,7 @@ class MediaRecognizeShareService:
             media_type=normalized_item.get("type"),
             year=normalized_item.get("year"),
             season=normalized_item.get("season"),
+            music_type=normalized_item.get("music_type"),
         )
         if not cache_key:
             return {"code": 1, "message": "无法生成缓存键"}
@@ -266,6 +309,7 @@ class MediaRecognizeShareService:
             media_type: Optional[str] = None,
             year: Optional[str] = None,
             season: Optional[int] = None,
+            music_type: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         查询共享识别记录
@@ -280,15 +324,26 @@ class MediaRecognizeShareService:
 
         year_key = self._normalize_year(year)
         season_key = self._normalize_season(type_key, season)
+        music_type_key = self._normalize_music_type(type_key, music_type)
+        if type_key == "music" and not music_type_key:
+            return {"code": 1, "message": "音乐实体类型无效"}
         exact_key = self._build_item_cache_key(
             keyword=keyword_key,
             media_type=type_key,
             year=year_key,
             season=season_key,
+            music_type=music_type_key,
         )
         item = await self._get_item(exact_key)
+        if not item and type_key == "music" and music_type_key == "recording":
+            item = await self._get_item(
+                self._build_legacy_music_cache_key(keyword_key, year_key)
+            )
         if not item:
             return {"code": 1, "message": "未找到共享识别记录"}
+
+        if type_key == "music" and not item.get("music_type"):
+            item = {**item, "music_type": music_type_key}
 
         return {
             "code": 0,

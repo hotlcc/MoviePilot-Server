@@ -1,6 +1,7 @@
 """多识别源统计、分享和数据库升级测试。"""
 
 import asyncio
+from unittest.mock import AsyncMock, Mock, patch
 
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -45,6 +46,13 @@ def test_schemas_keep_all_media_source_fields() -> None:
         **identity_payload,
     )
     assert recognize.model_dump().items() >= identity_payload.items()
+    music_recognize = MediaRecognizeShareItem(
+        keyword="Album",
+        type="music",
+        music_type="album",
+        **identity_payload,
+    )
+    assert music_recognize.music_type == "album"
 
 
 def test_statistics_separate_source_namespaces_and_keep_season_zero() -> None:
@@ -207,18 +215,69 @@ def test_media_recognize_share_normalizes_music_type_without_season() -> None:
         "type": "音乐",
         "media_source": "musicbrainz",
         "media_id": "release-group-1",
+        "music_type": "album",
     })
 
     assert item["type"] == "music"
     assert item["season"] is None
     assert item["media_source"] == "musicbrainz"
     assert item["media_id"] == "release-group-1"
+    assert item["music_type"] == "album"
     assert MediaRecognizeShareService._build_cache_key(
-        "叶惠美", "music"
-    ) == "叶惠美|music||"
+        "叶惠美", "music", music_type="album"
+    ) == "叶惠美|music|||album"
+    assert MediaRecognizeShareService._build_cache_key(
+        "叶惠美", "music", music_type="recording"
+    ) != MediaRecognizeShareService._build_cache_key(
+        "叶惠美", "music", music_type="album"
+    )
     assert MediaRecognizeShareService._build_cache_key(
         "叶惠美", "movie"
     ) != MediaRecognizeShareService._build_cache_key("叶惠美", "music")
+
+
+def test_media_recognize_share_isolates_recording_and_album_keys() -> None:
+    """相同标题的单曲与专辑共享记录必须分别写入和查询。"""
+
+    async def run_scenario() -> None:
+        """使用内存字典模拟 Redis，验证实体维度不会互相覆盖。"""
+        storage: dict[str, str] = {}
+        redis = Mock()
+        redis.get = AsyncMock(side_effect=lambda key: storage.get(key))
+        redis.set = AsyncMock(
+            side_effect=lambda key, value: storage.__setitem__(key, value)
+        )
+        service = MediaRecognizeShareService()
+
+        with patch(
+            "app.services.media_recognize_share.get_redis",
+            return_value=redis,
+        ):
+            await service.upsert(MediaRecognizeShareItem(
+                keyword="同名作品",
+                type="music",
+                media_source="musicbrainz",
+                media_id="recording-1",
+                music_type="recording",
+            ))
+            await service.upsert(MediaRecognizeShareItem(
+                keyword="同名作品",
+                type="music",
+                media_source="musicbrainz",
+                media_id="release-group-1",
+                music_type="album",
+            ))
+            recording = await service.query(
+                "同名作品", media_type="music", music_type="recording"
+            )
+            album = await service.query(
+                "同名作品", media_type="music", music_type="album"
+            )
+
+        assert recording["data"]["item"]["media_id"] == "recording-1"
+        assert album["data"]["item"]["media_id"] == "release-group-1"
+
+    asyncio.run(run_scenario())
 
 
 def test_schema_upgrade_adds_and_backfills_media_identity() -> None:

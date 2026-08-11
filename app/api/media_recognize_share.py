@@ -23,6 +23,7 @@ async def query_media_recognize_share(
         type: str = None,
         year: str = None,
         season: int = None,
+        music_type: str = None,
 ):
     """
     查询共享媒体识别记录
@@ -32,4 +33,5 @@ async def query_media_recognize_share(
         media_type=type,
         year=year,
         season=season,
+        music_type=music_type,
     )
