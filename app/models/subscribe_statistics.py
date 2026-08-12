@@ -3,9 +3,21 @@
 """
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Float, Index, or_, select, delete, desc
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Float,
+    Index,
+    Integer,
+    String,
+    delete,
+    desc,
+    or_,
+    select,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.media import MediaSource, media_identity_check_sql
 from app.models.base import Base, get_id_column
 from app.schemas.models import SortType
 
@@ -23,13 +35,7 @@ class SubscribeStatistics(Base):
     year = Column(String)
     # 类型
     type = Column(String, index=True)
-    # 媒体编号
-    tmdbid = Column(Integer, index=True)
-    imdbid = Column(String)
-    tvdbid = Column(Integer)
-    doubanid = Column(String, index=True)
-    bangumiid = Column(Integer, index=True)
-    anilistid = Column(Integer, index=True)
+    # 统一媒体身份
     media_source = Column(String, index=True)
     media_id = Column(String, index=True)
     # 音乐实体类型，区分单曲和专辑
@@ -52,6 +58,10 @@ class SubscribeStatistics(Base):
     count = Column(Integer)
 
     __table_args__ = (
+        CheckConstraint(
+            media_identity_check_sql(),
+            name="ck_subscribe_statistics_media_identity",
+        ),
         Index(
             "ix_subscribe_statistics_media_identity",
             "media_source",
@@ -69,7 +79,7 @@ class SubscribeStatistics(Base):
     async def read(
             cls,
             db: AsyncSession,
-            media_source: str,
+            media_source: MediaSource,
             media_id: str,
             season: Optional[int],
     ):

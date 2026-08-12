@@ -8,7 +8,11 @@ from datetime import datetime
 from typing import Any, Optional
 
 from app.core.config import settings
-from app.core.media import resolve_media_identity
+from app.core.media import (
+    build_legacy_media_identity,
+    resolve_legacy_media_identity,
+    resolve_media_identity,
+)
 from app.db.redis import get_redis
 from app.schemas.models import MediaRecognizeShareItem
 
@@ -159,9 +163,14 @@ class MediaRecognizeShareService:
         return f"{keyword_key}|music|{cls._normalize_year(year) or ''}|"
 
     @classmethod
-    def _normalize_item_dict(cls, item: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _normalize_item_dict(
+            cls,
+            item: dict[str, Any],
+            *,
+            allow_legacy_identity: bool = False,
+    ) -> Optional[dict[str, Any]]:
         """
-        规范化共享识别项
+        规范化共享识别项；旧专用 ID 只允许在 Redis 存量读取边界转换。
         """
         keyword = str(item.get("keyword") or "").strip()
         media_type = cls._normalize_media_type(item.get("type"))
@@ -179,20 +188,21 @@ class MediaRecognizeShareService:
         music_type = cls._normalize_music_type(media_type, item.get("music_type"))
         if media_type == "music" and not music_type:
             return None
-        doubanid = item.get("doubanid")
         title = item.get("title")
-        media_source, media_id = resolve_media_identity(item)
+        identity_resolver = (
+            resolve_legacy_media_identity
+            if allow_legacy_identity else resolve_media_identity
+        )
+        media_source, media_id = identity_resolver(item)
+        if not media_source or not media_id:
+            return None
 
         return {
             "keyword": keyword,
             "type": media_type,
             "year": cls._normalize_year(item.get("year")),
             "season": season,
-            "tmdbid": item.get("tmdbid"),
-            "doubanid": str(doubanid).strip() if doubanid else None,
-            "bangumiid": item.get("bangumiid"),
-            "anilistid": item.get("anilistid"),
-            "media_source": media_source,
+            "media_source": str(media_source),
             "media_id": media_id,
             "music_type": music_type,
             "title": str(title).strip() if title else None,
@@ -256,27 +266,33 @@ class MediaRecognizeShareService:
         if not cache_key:
             return None
 
-        raw_item = await get_redis().get(self._item_key(cache_key))
-        return self._deserialize_item(raw_item)
+        redis = get_redis()
+        item_key = self._item_key(cache_key)
+        raw_item = await redis.get(item_key)
+        stored_item = self._deserialize_item(raw_item)
+        if not stored_item:
+            return None
+        normalized_item = self._normalize_item_dict(
+            stored_item,
+            allow_legacy_identity=True,
+        )
+        if not normalized_item:
+            return None
+        if normalized_item != stored_item:
+            await redis.set(item_key, self._serialize_item(normalized_item))
+        return normalized_item
 
     async def upsert(self, item: MediaRecognizeShareItem) -> dict[str, Any]:
         """
         新增或更新共享识别记录
         """
+        media_source, media_id = resolve_media_identity(item)
+        if not media_source or not media_id:
+            return {"code": 1, "message": "媒体来源和媒体ID必须同时有效"}
+
         normalized_item = self._normalize_item_dict(item.model_dump())
         if not normalized_item:
             return {"code": 1, "message": "关键字或媒体类型无效"}
-
-        if not any(
-                [
-                    normalized_item.get("tmdbid"),
-                    normalized_item.get("doubanid"),
-                    normalized_item.get("bangumiid"),
-                    normalized_item.get("anilistid"),
-                    normalized_item.get("media_id"),
-                ]
-        ):
-            return {"code": 1, "message": "至少需要一个有效的媒体ID"}
 
         cache_key = self._build_item_cache_key(
             keyword=normalized_item.get("keyword"),
@@ -300,7 +316,7 @@ class MediaRecognizeShareService:
         return {
             "code": 0,
             "message": "success",
-            "data": {"item": merged_item},
+            "data": {"item": build_legacy_media_identity(merged_item)},
         }
 
     async def query(
@@ -348,7 +364,7 @@ class MediaRecognizeShareService:
         return {
             "code": 0,
             "message": "success",
-            "data": {"item": item},
+            "data": {"item": build_legacy_media_identity(item)},
         }
 
 

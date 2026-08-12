@@ -3,7 +3,7 @@
 批量修复 SUBSCRIBE_STATISTICS 与 SUBSCRIBE_SHARE 表中缺失的 genre_ids。
 
 逻辑：
-- 查询两张表中 genre_ids 为空/NULL，且 tmdbid 存在的记录
+- 查询两张表中 genre_ids 为空/NULL，且统一身份为 TMDB 的记录
 - 根据记录的 type 决定调用 TMDB 的 movie 或 tv 接口
   - 修正：支持中文类型值（"电影"-> movie，"电视剧"-> tv）
 - 获取 genres 列表并以逗号拼接为字符串，更新回数据库
@@ -54,26 +54,28 @@ async def _fetch_and_update_stat(session: AsyncSession, record: SubscribeStatist
     """为订阅统计表的单条记录获取并更新 genre_ids。返回是否完成更新。"""
     media_type = _normalize_media_type(record.type)
 
-    if not record.tmdbid:
+    if record.media_source != "themoviedb" or not record.media_id:
         return False
 
     try:
-        genre_ids: Optional[str] = await tmdb_service.get_genre_ids(record.tmdbid, media_type)
+        genre_ids: Optional[str] = await tmdb_service.get_genre_ids(
+            int(record.media_id), media_type
+        )
     except Exception as exc:  # 网络等异常
-        print(f"[SKIP] tmdbid={record.tmdbid} 获取失败: {exc}")
+        print(f"[SKIP] media_id={record.media_id} 获取失败: {exc}")
         return False
 
     if not genre_ids:
-        print(f"[MISS] 无法获取 genres: id={record.id} tmdbid={record.tmdbid} type={media_type}")
+        print(f"[MISS] 无法获取 genres: id={record.id} media_id={record.media_id} type={media_type}")
         return False
 
     if dry_run:
-        print(f"[DRY] 将更新 id={record.id} tmdbid={record.tmdbid} type={media_type} -> genre_ids='{genre_ids}'")
+        print(f"[DRY] 将更新 id={record.id} media_id={record.media_id} type={media_type} -> genre_ids='{genre_ids}'")
         return True
 
     # 使用模型自带的 update 以保持一致的提交和刷新逻辑
     await record.update(session, {"genre_ids": genre_ids})
-    print(f"[OK] 已更新 id={record.id} tmdbid={record.tmdbid} -> genre_ids='{genre_ids}'")
+    print(f"[OK] 已更新 id={record.id} media_id={record.media_id} -> genre_ids='{genre_ids}'")
     return True
 
 
@@ -81,25 +83,27 @@ async def _fetch_and_update_share(session: AsyncSession, record: SubscribeShare,
     """为订阅分享表的单条记录获取并更新 genre_ids。返回是否完成更新。"""
     media_type = _normalize_media_type(record.type)
 
-    if not record.tmdbid:
+    if record.media_source != "themoviedb" or not record.media_id:
         return False
 
     try:
-        genre_ids: Optional[str] = await tmdb_service.get_genre_ids(record.tmdbid, media_type)
+        genre_ids: Optional[str] = await tmdb_service.get_genre_ids(
+            int(record.media_id), media_type
+        )
     except Exception as exc:
-        print(f"[SKIP] share tmdbid={record.tmdbid} 获取失败: {exc}")
+        print(f"[SKIP] share media_id={record.media_id} 获取失败: {exc}")
         return False
 
     if not genre_ids:
-        print(f"[MISS] 无法获取 genres: share id={record.id} tmdbid={record.tmdbid} type={media_type}")
+        print(f"[MISS] 无法获取 genres: share id={record.id} media_id={record.media_id} type={media_type}")
         return False
 
     if dry_run:
-        print(f"[DRY] 将更新 share id={record.id} tmdbid={record.tmdbid} type={media_type} -> genre_ids='{genre_ids}'")
+        print(f"[DRY] 将更新 share id={record.id} media_id={record.media_id} type={media_type} -> genre_ids='{genre_ids}'")
         return True
 
     await record.update(session, {"genre_ids": genre_ids})
-    print(f"[OK] 已更新 share id={record.id} tmdbid={record.tmdbid} -> genre_ids='{genre_ids}'")
+    print(f"[OK] 已更新 share id={record.id} media_id={record.media_id} -> genre_ids='{genre_ids}'")
     return True
 
 
@@ -109,7 +113,8 @@ async def _run(dry_run: bool, limit: Optional[int]) -> None:
         stat_query = select(SubscribeStatistics).where(
             and_(
                 or_(SubscribeStatistics.genre_ids.is_(None), SubscribeStatistics.genre_ids == ""),
-                SubscribeStatistics.tmdbid.isnot(None),
+                SubscribeStatistics.media_source == "themoviedb",
+                SubscribeStatistics.media_id.isnot(None),
             )
         ).order_by(SubscribeStatistics.id.asc())
 
@@ -131,7 +136,8 @@ async def _run(dry_run: bool, limit: Optional[int]) -> None:
         share_query = select(SubscribeShare).where(
             and_(
                 or_(SubscribeShare.genre_ids.is_(None), SubscribeShare.genre_ids == ""),
-                SubscribeShare.tmdbid.isnot(None),
+                SubscribeShare.media_source == "themoviedb",
+                SubscribeShare.media_id.isnot(None),
             )
         ).order_by(SubscribeShare.id.asc())
 

@@ -1,10 +1,16 @@
 """
 Pydantic模型定义
 """
-from typing import List, Optional
+from typing import Any, ClassVar, List, Optional
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.core.media import (
+    MediaSource,
+    resolve_legacy_media_identity,
+    resolve_media_identity,
+)
 
 
 class SortType(str, Enum):
@@ -48,19 +54,58 @@ class UsageStatisticItem(BaseModel):
     arch: Optional[str] = None
 
 
-class SubscribeStatisticItem(BaseModel):
+class MediaIdentityCompatibilityModel(BaseModel):
+    """统一媒体身份请求基类，并在 API 边界兼容旧版客户端字段。"""
+
+    LEGACY_IDENTITY_FIELDS: ClassVar[frozenset[str]] = frozenset({
+        "tmdbid", "doubanid", "bangumiid", "anilistid", "imdbid",
+        "tvdbid", "mediaid", "source",
+    })
+    model_config = ConfigDict(extra="ignore")
+
+    media_source: Optional[MediaSource] = None
+    media_id: Optional[str] = None
+    tmdbid: Optional[str | int] = Field(default=None, exclude=True)
+    doubanid: Optional[str | int] = Field(default=None, exclude=True)
+    bangumiid: Optional[str | int] = Field(default=None, exclude=True)
+    anilistid: Optional[str | int] = Field(default=None, exclude=True)
+    imdbid: Optional[str | int] = Field(default=None, exclude=True)
+    tvdbid: Optional[str | int] = Field(default=None, exclude=True)
+    mediaid: Optional[str] = Field(default=None, exclude=True)
+    source: Optional[str] = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_compatible_identity(cls, data: Any) -> Any:
+        """将旧版身份输入转换为固定枚举来源和原生 ID。"""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        source, media_id = resolve_legacy_media_identity(normalized)
+        if source and media_id:
+            normalized["media_source"] = source
+            normalized["media_id"] = media_id
+        return normalized
+
+    @model_validator(mode="after")
+    def normalize_identity_pair(self):
+        """确保模型内部的统一身份始终完整成对，零哨兵按未提供处理。"""
+        source, media_id = resolve_media_identity(self)
+        self.media_source = source
+        self.media_id = media_id
+        return self
+
+    def storage_payload(self) -> dict[str, Any]:
+        """返回只含统一身份与业务字段的持久化载荷。"""
+        return self.model_dump(exclude=self.LEGACY_IDENTITY_FIELDS)
+
+
+class SubscribeStatisticItem(MediaIdentityCompatibilityModel):
     """订阅统计项"""
+
     name: Optional[str] = None
     year: Optional[str] = None
     type: Optional[str] = None
-    tmdbid: Optional[int] = None
-    imdbid: Optional[str] = None
-    tvdbid: Optional[int] = None
-    doubanid: Optional[str] = None
-    bangumiid: Optional[int] = None
-    anilistid: Optional[int] = None
-    media_source: Optional[str] = None
-    media_id: Optional[str] = None
     music_type: Optional[str] = None
     total_tracks: Optional[int] = None
     genre_ids: Optional[str] = None
@@ -76,8 +121,9 @@ class SubscribeStatisticList(BaseModel):
     subscribes: List[SubscribeStatisticItem]
 
 
-class SubscribeShareItem(BaseModel):
+class SubscribeShareItem(MediaIdentityCompatibilityModel):
     """订阅分享项"""
+
     id: Optional[int] = None
     share_title: Optional[str] = None
     share_comment: Optional[str] = None
@@ -87,14 +133,6 @@ class SubscribeShareItem(BaseModel):
     year: Optional[str] = None
     type: Optional[str] = None
     keyword: Optional[str] = None
-    tmdbid: Optional[int] = None
-    imdbid: Optional[str] = None
-    tvdbid: Optional[int] = None
-    doubanid: Optional[str] = None
-    bangumiid: Optional[int] = None
-    anilistid: Optional[int] = None
-    media_source: Optional[str] = None
-    media_id: Optional[str] = None
     music_type: Optional[str] = None
     total_tracks: Optional[int] = None
     season: Optional[int] = None
@@ -138,18 +176,13 @@ class SubscribeShareStatisticItem(BaseModel):
     total_reuse_count: int
 
 
-class MediaRecognizeShareItem(BaseModel):
+class MediaRecognizeShareItem(MediaIdentityCompatibilityModel):
     """共享媒体识别项"""
+
     keyword: str
     type: str
     year: Optional[str] = None
     season: Optional[int] = None
-    tmdbid: Optional[int] = None
-    doubanid: Optional[str] = None
-    bangumiid: Optional[int] = None
-    anilistid: Optional[int] = None
-    media_source: Optional[str] = None
-    media_id: Optional[str] = None
     music_type: Optional[str] = None
     title: Optional[str] = None
     created_at: Optional[str] = None

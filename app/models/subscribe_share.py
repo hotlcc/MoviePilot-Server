@@ -1,9 +1,24 @@
 """
 订阅分享模型
 """
-from sqlalchemy import Column, Integer, String, Float, Index, or_, and_, func, select, delete, desc, update
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Float,
+    Index,
+    Integer,
+    String,
+    and_,
+    delete,
+    desc,
+    func,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.media import media_identity_check_sql
 from app.models.base import Base, get_id_column
 from app.schemas.models import SortType
 
@@ -31,13 +46,7 @@ class SubscribeShare(Base):
     year = Column(String)
     # 类型
     type = Column(String)
-    # 媒体编号
-    tmdbid = Column(Integer)
-    imdbid = Column(String)
-    tvdbid = Column(Integer)
-    doubanid = Column(String)
-    bangumiid = Column(Integer)
-    anilistid = Column(Integer)
+    # 统一媒体身份
     media_source = Column(String, index=True)
     media_id = Column(String, index=True)
     # 音乐实体类型，区分单曲和专辑
@@ -80,6 +89,10 @@ class SubscribeShare(Base):
     count = Column(Integer)
 
     __table_args__ = (
+        CheckConstraint(
+            media_identity_check_sql(),
+            name="ck_subscribe_share_media_identity",
+        ),
         Index(
             "ix_subscribe_share_media_identity",
             "media_source",

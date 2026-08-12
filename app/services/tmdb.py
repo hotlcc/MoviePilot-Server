@@ -8,6 +8,7 @@ import aiohttp
 from cacheout import Cache
 
 from app.core.config import settings
+from app.core.media import MediaSource
 
 
 class TMDBService:
@@ -123,7 +124,8 @@ class TMDBService:
             "year": details.get("release_date", "").split("-")[0] if details.get("release_date") else
             details.get("first_air_date", "").split("-")[0] if details.get("first_air_date") else None,
             "type": normalized_type,
-            "tmdbid": tmdb_id,
+            "media_source": MediaSource.TMDB.value,
+            "media_id": str(tmdb_id),
             "poster": f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}" if details.get(
                 "poster_path") else None,
             "backdrop": f"https://image.tmdb.org/t/p/w1280{details.get('backdrop_path')}" if details.get(

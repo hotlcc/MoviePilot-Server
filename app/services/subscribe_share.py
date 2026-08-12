@@ -8,7 +8,7 @@ from app.models import SubscribeShare
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_manager
-from app.core.media import resolve_media_identity
+from app.core.media import build_legacy_media_identity, resolve_media_identity
 from app.schemas.models import SubscribeShareItem, SortType
 
 
@@ -39,7 +39,7 @@ class SubscribeShareService:
         # 如果不存在则创建
         if not sub:
             subscribe.date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sub = SubscribeShare(**subscribe.model_dump(), count=1)
+            sub = SubscribeShare(**subscribe.storage_payload(), count=1)
             await sub.create(db)
         # 如果存在则报错
         else:
@@ -78,7 +78,7 @@ class SubscribeShareService:
         if cached_data is None:
             shares = await SubscribeShare.list(db, name=name, page=page, count=count, genre_id=genre_id,
                                                min_rating=min_rating, max_rating=max_rating, sort_type=sort_type)
-            cached_data = [sha.dict() for sha in shares]
+            cached_data = [build_legacy_media_identity(sha.dict()) for sha in shares]
             cache_manager.share_cache.set(cache_key, cached_data)
 
         return cached_data

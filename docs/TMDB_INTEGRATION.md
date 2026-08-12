@@ -8,12 +8,18 @@ MoviePilot-Server 不再把订阅统计、订阅分享或共享识别结果转�
 
 媒体主身份由以下两个字段组成：
 
-- `media_source`：`themoviedb`、`douban`、`bangumi`、`anilist` 或插件自定义源。
+- `media_source`：固定枚举值，包括 `themoviedb`、`douban`、`bangumi`、
+  `anilist`、`imdb`、`tvdb`、`musicbrainz`、`theaudiodb`、`doubanmusic`、
+  `bilibili`、`mangguodiscover`、`migu`、`tencentvideodiscover`。
 - `media_id`：对应数据源的原生 ID，统一按字符串存储。
 
-`tmdbid`、`doubanid`、`bangumiid`、`anilistid` 是兼容和辅助字段，不参与
-跨数据源合并。旧客户端未上报统一身份时，服务端按上述顺序选择首个有效 ID
-回填 `media_source + media_id`。
+新版本客户端只应发送统一字段。考虑到中心服务无法要求所有已部署客户端同时
+升级，请求边界仍兼容 `tmdbid`、`doubanid`、`bangumiid`、`anilistid`、
+`imdbid`、`tvdbid` 以及旧复合 `mediaid`；完整的新字段始终优先，旧字段只用于
+转换。响应同时返回统一字段和按来源回填的旧字段，保证旧客户端可以继续读取。
+
+兼容字段不会写入数据库或 Redis。服务内部在请求校验后只保留
+`media_source + media_id`，存量升级完成后也会删除旧列和旧缓存字段。
 
 ## 客户端处理
 
@@ -41,11 +47,13 @@ MoviePilot-Server 不再把订阅统计、订阅分享或共享识别结果转�
 
 ## 共享识别
 
-`/recognize/share` 支持 TMDB、豆瓣、Bangumi、AniList 和插件自定义源，并返回
-原始 `media_source + media_id`。缓存键保留电视剧第 0 季，避免特别季与未指定季
-的记录冲突。
+`/recognize/share` 的新身份只接受固定枚举中的来源，并返回原始
+`media_source + media_id`，同时在 API 响应补充旧字段。缓存键保留电视剧第 0
+季，避免特别季与未指定季的记录冲突；命中旧 Redis 记录时会原位改写为统一
+身份结构。
 
 ## 数据库升级
 
-服务启动时会幂等补齐统计和分享表的多数据源字段及索引，并根据存量兼容 ID
-回填统一身份。SQLite 和 PostgreSQL 使用相同的升级语义。
+服务启动时会幂等补齐统计和分享表的统一字段及索引，根据存量专用 ID 回填，
+然后删除专用 ID 字段。未知来源会优先用可识别的旧 ID 回填；仍无法识别的身份
+会被清空。SQLite 和 PostgreSQL 使用相同的升级语义。

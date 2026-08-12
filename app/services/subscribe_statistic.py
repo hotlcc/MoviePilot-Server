@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_manager
-from app.core.media import resolve_media_identity
+from app.core.media import build_legacy_media_identity, resolve_media_identity
 from app.models import SubscribeStatistics
 from app.schemas.models import SubscribeStatisticItem, SortType
 
@@ -18,7 +18,7 @@ class SubscribeService:
     def _fill_media_identity(
             subscribe: SubscribeStatisticItem,
     ) -> tuple[str | None, str | None]:
-        """规范化统计项主身份，并兼容旧客户端的分数据源 ID。"""
+        """规范化统计项的统一媒体身份。"""
         media_source, media_id = resolve_media_identity(subscribe)
         subscribe.media_source = media_source
         subscribe.media_id = media_id
@@ -41,7 +41,7 @@ class SubscribeService:
 
         # 如果不存在则创建
         if not sub:
-            sub = SubscribeStatistics(**subscribe.model_dump(), count=1)
+            sub = SubscribeStatistics(**subscribe.storage_payload(), count=1)
             await sub.create(db)
         # 如果存在则更新
         else:
@@ -91,7 +91,7 @@ class SubscribeService:
                 season=subscribe.season,
             )
             if not sub:
-                sub = SubscribeStatistics(**subscribe.model_dump(), count=1)
+                sub = SubscribeStatistics(**subscribe.storage_payload(), count=1)
                 db.add(sub)
             else:
                 sub.count = (sub.count or 0) + 1
@@ -110,7 +110,10 @@ class SubscribeService:
         if cached_data is None:
             statistics = await SubscribeStatistics.list(db, stype=stype, page=page, count=count, genre_id=genre_id,
                                                         min_rating=min_rating, max_rating=max_rating, sort_type=sort_type)
-            cached_data = [sta.dict() for sta in statistics]
+            cached_data = [
+                build_legacy_media_identity(statistic.dict())
+                for statistic in statistics
+            ]
             cache_manager.statistic_cache.set(cache_key, cached_data)
 
         return cached_data
