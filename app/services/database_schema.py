@@ -3,13 +3,12 @@
 """
 from typing import Any
 
-from sqlalchemy import inspect, text
+from sqlalchemy import CheckConstraint, MetaData, Table, inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.media import (
     MEDIA_SOURCE_ALIASES as MEDIA_SOURCE_ENUM_ALIASES,
-    MEDIA_SOURCE_VALUES,
     media_identity_check_sql,
 )
 
@@ -66,6 +65,83 @@ MEDIA_IDENTITY_CONSTRAINTS = {
 }
 
 
+def _sqlite_rebuild_identity_table(
+        connection: Connection,
+        table_name: str,
+        constraint_name: str,
+) -> None:
+    """重建 SQLite 存量表，以替换无法原地修改的身份 CHECK 约束。"""
+    preparer = connection.dialect.identifier_preparer
+    quoted_table = preparer.quote(table_name)
+    temporary_table = f"__mp_{table_name.lower()}_identity_old"
+    quoted_temporary = preparer.quote(temporary_table)
+    if temporary_table in inspect(connection).get_table_names():
+        raise RuntimeError(f"SQLite migration table already exists: {temporary_table}")
+
+    # SQLite 重命名会连带保留索引和触发器名称，先保存定义再释放名称。
+    schema_objects = connection.execute(text(
+        "SELECT type, name, sql FROM sqlite_master "
+        "WHERE tbl_name = :table_name AND type IN ('index', 'trigger') "
+        "AND sql IS NOT NULL"
+    ), {"table_name": table_name}).mappings().all()
+    identity_trigger_prefix = constraint_name.removeprefix("ck_")
+    obsolete_triggers = {
+        f"trg_{identity_trigger_prefix}_insert",
+        f"trg_{identity_trigger_prefix}_update",
+    }
+
+    reflected_metadata = MetaData()
+    reflected_table = Table(
+        table_name,
+        reflected_metadata,
+        autoload_with=connection,
+    )
+    replacement_metadata = MetaData()
+    replacement_table = reflected_table.to_metadata(replacement_metadata)
+    for constraint in tuple(replacement_table.constraints):
+        constraint_sql = str(getattr(constraint, "sqltext", "")).lower()
+        if isinstance(constraint, CheckConstraint) and (
+                constraint.name == constraint_name
+                or (
+                    "media_source" in constraint_sql
+                    and "media_id" in constraint_sql
+                )
+        ):
+            replacement_table.constraints.remove(constraint)
+    replacement_table.append_constraint(CheckConstraint(
+        media_identity_check_sql(),
+        name=constraint_name,
+    ))
+    # 索引按 sqlite_master 原始 SQL 重建，可保留部分索引等方言细节。
+    replacement_table.indexes.clear()
+
+    for schema_object in schema_objects:
+        object_name = preparer.quote(schema_object["name"])
+        connection.execute(text(
+            f'DROP {schema_object["type"].upper()} IF EXISTS {object_name}'
+        ))
+    connection.execute(text(
+        f"ALTER TABLE {quoted_table} RENAME TO {quoted_temporary}"
+    ))
+    replacement_table.create(connection)
+    quoted_columns = ", ".join(
+        preparer.quote(column.name) for column in reflected_table.columns
+    )
+    connection.execute(text(
+        f"INSERT INTO {quoted_table} ({quoted_columns}) "
+        f"SELECT {quoted_columns} FROM {quoted_temporary}"
+    ))
+    connection.execute(text(f"DROP TABLE {quoted_temporary}"))
+
+    for schema_object in schema_objects:
+        if (
+                schema_object["type"] == "trigger"
+                and schema_object["name"] in obsolete_triggers
+        ):
+            continue
+        connection.execute(text(schema_object["sql"]))
+
+
 def _ensure_media_identity_constraints(
         connection: Connection,
         table_names: set[str],
@@ -77,11 +153,18 @@ def _ensure_media_identity_constraints(
             continue
         if dialect_name == "postgresql":
             existing_constraints = {
-                constraint.get("name")
+                constraint.get("name"): constraint.get("sqltext", "")
                 for constraint in inspect(connection).get_check_constraints(table_name)
             }
-            if constraint_name in existing_constraints:
+            constraint_sql = existing_constraints.get(constraint_name, "")
+            normalized_constraint_sql = constraint_sql.lower()
+            if "length" in normalized_constraint_sql and "64" in normalized_constraint_sql:
                 continue
+            if constraint_name in existing_constraints:
+                connection.execute(text(
+                    f'ALTER TABLE "{table_name}" '
+                    f'DROP CONSTRAINT "{constraint_name}"'
+                ))
             connection.execute(text(
                 f'ALTER TABLE "{table_name}" '
                 f'ADD CONSTRAINT "{constraint_name}" '
@@ -91,23 +174,18 @@ def _ensure_media_identity_constraints(
 
         if dialect_name != "sqlite":
             continue
-        # SQLite 不支持 ALTER TABLE ADD CHECK，存量表用等价触发器兜底。
-        trigger_prefix = constraint_name.removeprefix("ck_")
-        insert_trigger = f"trg_{trigger_prefix}_insert"
-        update_trigger = f"trg_{trigger_prefix}_update"
-        check_sql = media_identity_check_sql("NEW")
-        connection.execute(text(
-            f'CREATE TRIGGER IF NOT EXISTS "{insert_trigger}" '
-            f'BEFORE INSERT ON "{table_name}" '
-            f'FOR EACH ROW WHEN NOT ({check_sql}) '
-            "BEGIN SELECT RAISE(ABORT, 'invalid media identity'); END"
-        ))
-        connection.execute(text(
-            f'CREATE TRIGGER IF NOT EXISTS "{update_trigger}" '
-            f'BEFORE UPDATE OF media_source, media_id ON "{table_name}" '
-            f'FOR EACH ROW WHEN NOT ({check_sql}) '
-            "BEGIN SELECT RAISE(ABORT, 'invalid media identity'); END"
-        ))
+        existing_constraints = {
+            constraint.get("name"): constraint.get("sqltext", "")
+            for constraint in inspect(connection).get_check_constraints(table_name)
+        }
+        constraint_sql = existing_constraints.get(constraint_name, "").lower()
+        if "length" in constraint_sql and "64" in constraint_sql:
+            continue
+        _sqlite_rebuild_identity_table(
+            connection,
+            table_name,
+            constraint_name,
+        )
 
 
 def _ensure_subscribe_identity_schema(connection: Connection) -> None:
@@ -140,17 +218,17 @@ def _ensure_subscribe_identity_schema(connection: Connection) -> None:
                 f'WHERE LOWER(TRIM(media_source)) = :alias'
             ), {"source": source, "alias": alias})
 
-        allowed_source_params = {
-            f"allowed_source_{index}": source
-            for index, source in enumerate(MEDIA_SOURCE_VALUES)
-        }
-        allowed_source_sql = ", ".join(
-            f":allowed_source_{index}" for index in range(len(MEDIA_SOURCE_VALUES))
-        )
+        connection.execute(text(
+            f'UPDATE "{table_name}" '
+            'SET media_source = LOWER(TRIM(media_source)) '
+            'WHERE media_source IS NOT NULL'
+        ))
+
         invalid_identity_sql = (
             "media_source IS NULL OR TRIM(media_source) = '' "
             "OR media_id IS NULL OR TRIM(media_id) IN ('', '0') "
-            f"OR LOWER(TRIM(media_source)) NOT IN ({allowed_source_sql})"
+            "OR LENGTH(media_source) > 64 OR media_source LIKE '%:%' "
+            "OR media_source LIKE '% %'"
         )
         for source, id_field in LEGACY_MEDIA_ID_COLUMNS:
             if id_field not in existing_columns:
@@ -162,14 +240,14 @@ def _ensure_subscribe_identity_schema(connection: Connection) -> None:
                 f'WHERE ({invalid_identity_sql}) '
                 f'AND "{id_field}" IS NOT NULL '
                 f'AND TRIM(CAST("{id_field}" AS VARCHAR)) NOT IN (\'\', \'0\')'
-            ), {"source": source, **allowed_source_params})
+            ), {"source": source})
 
-        # 统一身份必须成对存在且来源固定；无法从旧列补齐的身份不再保留。
+        # 统一身份必须成对存在且来源标识合法；无法从旧列补齐的身份不再保留。
         connection.execute(text(
             f'UPDATE "{table_name}" '
             'SET media_source = NULL, media_id = NULL '
             f'WHERE {invalid_identity_sql}'
-        ), allowed_source_params)
+        ))
         connection.execute(text(
             f'UPDATE "{table_name}" SET media_id = TRIM(media_id) '
             'WHERE media_id IS NOT NULL'

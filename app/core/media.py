@@ -1,11 +1,19 @@
 """媒体身份处理工具。"""
 
+import re
 from enum import Enum
 from typing import Any, Optional, Tuple
 
+from pydantic import GetJsonSchemaHandler
+from pydantic_core import CoreSchema
+
+
+MEDIA_SOURCE_IDENTIFIER_PATTERN = r"^[a-z][a-z0-9._-]{0,63}$"
+_MEDIA_SOURCE_IDENTIFIER_RE = re.compile(MEDIA_SOURCE_IDENTIFIER_PATTERN)
+
 
 class MediaSource(str, Enum):
-    """MoviePilot 全链路允许使用的媒体主身份来源。"""
+    """内置媒体来源常量，并兼容主程序插件注册的扩展来源。"""
 
     TMDB = "themoviedb"
     Douban = "douban"
@@ -25,24 +33,48 @@ class MediaSource(str, Enum):
         """返回 API 与数据库使用的规范来源值。"""
         return self.value
 
+    @classmethod
+    def _missing_(cls, value: object) -> Optional["MediaSource"]:
+        """将格式合法的插件来源解析为动态枚举成员。"""
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().casefold()
+        known_member = cls._value2member_map_.get(normalized)
+        if known_member:
+            return known_member
+        if not _MEDIA_SOURCE_IDENTIFIER_RE.fullmatch(normalized):
+            return None
+        member = str.__new__(cls, normalized)
+        member._name_ = normalized
+        member._value_ = normalized
+        cls._value2member_map_.setdefault(normalized, member)
+        return cls._value2member_map_[normalized]
 
-# 数据库约束和迁移必须与 API 枚举使用同一份来源集合。
-MEDIA_SOURCE_VALUES = tuple(source.value for source in MediaSource)
+    @classmethod
+    def __get_pydantic_json_schema__(
+            cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler,
+    ) -> dict:
+        """在 OpenAPI 中公开扩展标识格式和内置来源示例。"""
+        schema = handler(core_schema)
+        schema.pop("enum", None)
+        schema["pattern"] = MEDIA_SOURCE_IDENTIFIER_PATTERN
+        schema["examples"] = [source.value for source in cls]
+        return schema
 
 
 def media_identity_check_sql(column_prefix: str = "") -> str:
-    """生成数据库使用的统一媒体身份原子约束表达式。"""
+    """生成允许插件扩展来源且保证身份成对的数据库约束表达式。"""
     prefix = f"{column_prefix}." if column_prefix else ""
     source_column = f"{prefix}media_source"
     id_column = f"{prefix}media_id"
-    allowed_sources = ", ".join(
-        f"'{source.replace(chr(39), chr(39) * 2)}'"
-        for source in MEDIA_SOURCE_VALUES
-    )
     return (
         f"(({source_column} IS NULL AND {id_column} IS NULL) OR "
         f"({source_column} IS NOT NULL AND {id_column} IS NOT NULL AND "
-        f"{source_column} IN ({allowed_sources}) AND "
+        f"TRIM({source_column}) <> '' AND "
+        f"{source_column} = LOWER(TRIM({source_column})) AND "
+        f"LENGTH({source_column}) <= 64 AND "
+        f"{source_column} NOT LIKE '%:%' AND "
+        f"{source_column} NOT LIKE '% %' AND "
         f"TRIM({id_column}) <> '' AND TRIM({id_column}) <> '0'))"
     )
 
@@ -96,13 +128,19 @@ MEDIA_SOURCE_PREFIXES = {
 
 
 def normalize_media_source(source: Optional[MediaSource | str]) -> Optional[MediaSource]:
-    """将来源别名规范化为固定枚举，未知来源返回 None。"""
+    """将内置别名或插件扩展标识规范化为 MediaSource。"""
     if not source:
         return None
     if isinstance(source, MediaSource):
         return source
     normalized = str(source).strip().casefold()
-    return MEDIA_SOURCE_ALIASES.get(normalized)
+    builtin_source = MEDIA_SOURCE_ALIASES.get(normalized)
+    if builtin_source:
+        return builtin_source
+    try:
+        return MediaSource(normalized)
+    except ValueError:
+        return None
 
 
 def _get_value(item: Any, field: str) -> Any:
@@ -220,5 +258,5 @@ def build_legacy_media_identity(item: Any) -> dict[str, Any]:
         "media_source": source.value,
         "media_id": media_id,
         **legacy_fields,
-        "mediaid": f"{MEDIA_SOURCE_PREFIXES[source]}:{media_id}",
+        "mediaid": f"{MEDIA_SOURCE_PREFIXES.get(source, source.value)}:{media_id}",
     }

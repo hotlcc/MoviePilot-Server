@@ -77,7 +77,7 @@ class MediaIdentityCompatibilityModel(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_compatible_identity(cls, data: Any) -> Any:
-        """将旧版身份输入转换为固定枚举来源和原生 ID。"""
+        """将旧版身份输入转换为内置或插件扩展来源和原生 ID。"""
         if not isinstance(data, dict):
             return data
         normalized = dict(data)

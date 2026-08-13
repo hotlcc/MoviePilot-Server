@@ -31,8 +31,8 @@ from app.services.subscribe_statistic import SubscribeService
 from main import App
 
 
-def test_schemas_normalize_new_identity_and_reject_unknown_sources() -> None:
-    """中心服务保存模型应接受统一身份，并拒绝固定枚举之外的新来源。"""
+def test_schemas_normalize_builtin_and_plugin_identities() -> None:
+    """中心服务保存模型应同时接受内置与插件扩展的统一身份。"""
     identity_payload = {
         "media_source": MediaSource.AniList,
         "media_id": "subject-126",
@@ -65,9 +65,15 @@ def test_schemas_normalize_new_identity_and_reject_unknown_sources() -> None:
     )
     assert music_recognize.music_type == "album"
 
+    plugin_item = SubscribeStatisticItem(
+        media_source="plugin-anime",
+        media_id="subject-126",
+    )
+    assert plugin_item.media_source == MediaSource("plugin-anime")
+
     with pytest.raises(ValidationError):
         SubscribeStatisticItem(
-            media_source="plugin-anime",
+            media_source="invalid source:",
             media_id="subject-126",
         )
 
@@ -806,14 +812,14 @@ def test_schema_upgrade_backfills_identity_and_drops_legacy_columns() -> None:
                     "WHERE id = 2"
                 ))
             ).one()
-            assert tuple(recovered_row) == ("themoviedb", "99")
-            unknown_row = (
+            assert tuple(recovered_row) == ("plugin-source", "legacy")
+            plugin_row = (
                 await connection.execute(text(
                     'SELECT media_source, media_id FROM "SUBSCRIBE_STATISTICS" '
                     "WHERE id = 3"
                 ))
             ).one()
-            assert tuple(unknown_row) == (None, None)
+            assert tuple(plugin_row) == ("plugin-source", "orphan")
             incomplete_rows = (
                 await connection.execute(text(
                     'SELECT media_source, media_id FROM "SUBSCRIBE_STATISTICS" '
@@ -832,26 +838,29 @@ def test_schema_upgrade_backfills_identity_and_drops_legacy_columns() -> None:
             ).one()
             assert tuple(share_row) == ("douban", "84")
 
-            triggers = {
-                row[0]
-                for row in (
-                    await connection.execute(text(
-                        "SELECT name FROM sqlite_master "
-                        "WHERE type = 'trigger'"
-                    ))
-                ).all()
-            }
+            constraint_names = await connection.run_sync(
+                lambda sync_connection: {
+                    table_name: {
+                        constraint.get("name")
+                        for constraint in inspect(sync_connection)
+                        .get_check_constraints(table_name)
+                    }
+                    for table_name in (
+                        "SUBSCRIBE_STATISTICS", "SUBSCRIBE_SHARE",
+                    )
+                }
+            )
             assert {
-                "trg_subscribe_statistics_media_identity_insert",
-                "trg_subscribe_statistics_media_identity_update",
-                "trg_subscribe_share_media_identity_insert",
-                "trg_subscribe_share_media_identity_update",
-            } <= triggers
+                "ck_subscribe_statistics_media_identity",
+            } <= constraint_names["SUBSCRIBE_STATISTICS"]
+            assert {
+                "ck_subscribe_share_media_identity",
+            } <= constraint_names["SUBSCRIBE_SHARE"]
 
         invalid_writes = (
             'INSERT INTO "SUBSCRIBE_STATISTICS" '
             "(id, name, media_source, media_id) "
-            "VALUES (20, 'Invalid', 'plugin-source', '20')",
+            "VALUES (20, 'Invalid', 'invalid:source', '20')",
             'UPDATE "SUBSCRIBE_STATISTICS" '
             "SET media_source = 'douban', media_id = '0' WHERE id = 1",
             'INSERT INTO "SUBSCRIBE_SHARE" '
@@ -862,6 +871,53 @@ def test_schema_upgrade_backfills_identity_and_drops_legacy_columns() -> None:
             with pytest.raises(IntegrityError):
                 async with engine.begin() as connection:
                     await connection.execute(text(statement))
+        await engine.dispose()
+
+    asyncio.run(run_scenario())
+
+
+def test_schema_upgrade_replaces_fixed_sqlite_source_constraint() -> None:
+    """已存在固定来源 CHECK 的 SQLite 表升级后应允许新插件来源。"""
+
+    async def run_scenario() -> None:
+        """构造旧约束表并验证升级后的数据与写入契约。"""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.execute(text(
+                'CREATE TABLE "SUBSCRIBE_STATISTICS" ('
+                "id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, type VARCHAR, "
+                "media_source VARCHAR, media_id VARCHAR, season INTEGER, "
+                "count INTEGER, CONSTRAINT "
+                "ck_subscribe_statistics_media_identity CHECK ("
+                "(media_source IS NULL AND media_id IS NULL) OR "
+                "(media_source IN ('themoviedb', 'douban') "
+                "AND media_id IS NOT NULL AND trim(media_id) <> '' "
+                "AND trim(media_id) <> '0')))"
+            ))
+            await connection.execute(text(
+                'INSERT INTO "SUBSCRIBE_STATISTICS" '
+                "(id, name, media_source, media_id, count) "
+                "VALUES (1, 'Existing', 'themoviedb', '550', 1)"
+            ))
+
+        await ensure_database_schema(engine, Base, is_postgresql=False)
+
+        async with engine.begin() as connection:
+            await connection.execute(text(
+                'INSERT INTO "SUBSCRIBE_STATISTICS" '
+                "(id, name, media_source, media_id, count) "
+                "VALUES (2, 'Plugin', 'acme.video', 'custom-2', 1)"
+            ))
+            rows = (
+                await connection.execute(text(
+                    'SELECT media_source, media_id FROM "SUBSCRIBE_STATISTICS" '
+                    "ORDER BY id"
+                ))
+            ).all()
+        assert [tuple(row) for row in rows] == [
+            ("themoviedb", "550"),
+            ("acme.video", "custom-2"),
+        ]
         await engine.dispose()
 
     asyncio.run(run_scenario())
@@ -887,7 +943,7 @@ def test_new_tables_enforce_media_identity_check_constraint(
         required_columns: str,
         constraint_name: str,
 ) -> None:
-    """新建订阅表必须由 CHECK 约束拒绝非法来源、半对和无效 ID。"""
+    """新建订阅表必须允许插件来源，并拒绝非法来源、半对和无效 ID。"""
 
     async def run_scenario() -> None:
         """在真实 SQLite 元数据和写入路径上验证约束语义。"""
@@ -908,6 +964,7 @@ def test_new_tables_enforce_media_identity_check_constraint(
         valid_identities = (
             (None, None),
             (MediaSource.TMDB.value, "550"),
+            ("plugin-source", "plugin-550"),
         )
         for row_id, (media_source, media_id) in enumerate(valid_identities, start=1):
             async with engine.begin() as connection:
@@ -924,7 +981,7 @@ def test_new_tables_enforce_media_identity_check_constraint(
         invalid_identities = (
             (MediaSource.TMDB.value, None),
             (None, "550"),
-            ("plugin-source", "550"),
+            ("invalid:source", "550"),
             (MediaSource.TMDB.value, ""),
             (MediaSource.TMDB.value, "   "),
             (MediaSource.TMDB.value, "0"),
